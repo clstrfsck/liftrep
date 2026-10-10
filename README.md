@@ -241,7 +241,7 @@ What is drawn in each lift clip:
 |---|---|
 | Green line, `TOP` + `dwell` | Top of travel for the rep in progress, with the top dwell time |
 | Red line, `BOTTOM` + `dwell` | Bottom of travel for the rep in progress, with the bottom dwell time |
-| Orange arrow, `EFFORT` | Effort (lifting) phase from bottom to top, with its duration; thick while lifting |
+| Orange arrow, `raising` | Effort (lifting) phase from bottom to top, with its duration; thick while lifting |
 | Thin blue arrow, `lowering` | Lowering phase, with its duration; thick while lowering |
 | Dot | Bar proxy (wrists or shoulders); orange during the effort phase |
 | Panel (top left) | Clip number and lift, `Rep k of N` for the clip, last rep's duration, current phase |

@@ -279,8 +279,8 @@ def draw(img, f, g, lab):
     label(img, "BOTTOM", lab["bot_lab"], g["br"], (8, -6), 0.55, PINK)
     text(img, f"dwell {fmt(bot_dw)}", lab["bot_lab"] + (8, 18), 0.5, PINK)
     em = lab["eff_lab"]
-    text(img, f"EFFORT {fmt(eff)}", em + (-185, -8), 0.6 if eff_on else 0.55, ORANGE)
-    text(img, f"lowering {fmt(low)}", em + (-185, 18), 0.5, BLUE)
+    text(img, f"raising {fmt(eff)}", em + (-185, -8), 0.6 if eff_on else 0.55, ORANGE)
+    text(img, f"lowering {fmt(low)}", em + (-185, 18), 0.6 if low_on else 0.55, BLUE)
 
 
 # ------------------------------------------------------------------------------- output
