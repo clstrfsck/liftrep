@@ -29,7 +29,12 @@ def open_video(path):
     if not ok:
         cap.release()
         raise SystemExit(f"{path}: no frame could be decoded (damaged or unsupported video?)")
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+    # rewind; if the backend can't seek back, reopen so callers always start at frame 0
+    if not cap.set(cv2.CAP_PROP_POS_FRAMES, 0) or cap.get(cv2.CAP_PROP_POS_FRAMES) != 0:
+        cap.release()
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            raise SystemExit(f"cannot reopen video: {path}")
     return cap, fps, int(n_frames)
 
 

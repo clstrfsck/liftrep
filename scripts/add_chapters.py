@@ -65,11 +65,11 @@ def esc(s):
 
 
 def write_with_chapters(video, analysis_dir, out, offset=0.0):
+    if same_file(video, out):  # checked first, so the guard holds with or without ffmpeg
+        raise SystemExit("OUT must be a different file from VIDEO")
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise SystemExit("ffmpeg not found on the PATH")
-    if same_file(video, out):
-        raise SystemExit("OUT must be a different file from VIDEO")
     cap, fps, n_frames = open_video(video)
     duration = n_frames / fps
     cap.release()

@@ -1,5 +1,6 @@
 """Input validation and safety checks of the command-line scripts."""
 import os
+import shutil
 import subprocess
 
 import cv2
@@ -42,6 +43,8 @@ def test_annotation_refuses_to_overwrite_its_source(tmp_path, tiny_video):
     assert tiny_video.read_bytes() == before
 
 
+@pytest.mark.skipif(shutil.which("ffmpeg") is None,
+                    reason="the temporary chapter render is only made when ffmpeg is installed")
 def test_annotation_refuses_when_the_temporary_render_is_the_source(tmp_path, tiny_video):
     out = empty_analysis(tmp_path)
     src = tmp_path / "x.nochapters.mp4"
@@ -162,3 +165,60 @@ def test_pipeline_refuses_earlier_results_without_overwrite(tmp_path, tiny_video
                           capture_output=True, text=True, check=False)
     assert proc.returncode != 0 and "earlier run" in proc.stderr
     assert (work / "annotated.mp4").read_bytes() == b"old video"
+
+
+def test_pipeline_overwrite_never_deletes_the_input(tmp_path, tiny_video):
+    work = tmp_path / "w"
+    work.mkdir()
+    for name, make in (("annotated.mp4", shutil.copy), ("annotated.nochapters.mp4", os.link)):
+        target = work / name
+        make(tiny_video, target)
+        proc = subprocess.run([str(ROOT / "run_pipeline.sh"), str(target), "--out-dir", str(work),
+                               "--overwrite", "--no-video"], capture_output=True, text=True, check=False)
+        assert proc.returncode != 0 and "input video" in proc.stderr
+        assert target.exists()
+        # a hard link elsewhere to the input: -ef sees through it
+        link_in = tmp_path / f"in_{name}"
+        os.link(target, link_in)
+        proc = subprocess.run([str(ROOT / "run_pipeline.sh"), str(link_in), "--out-dir", str(work),
+                               "--overwrite", "--no-video"], capture_output=True, text=True, check=False)
+        assert proc.returncode != 0 and target.exists()
+        target.unlink()
+        link_in.unlink()
+
+
+def test_launcher_overwrite_never_deletes_an_input_inside_restab(tmp_path, tiny_video):
+    work = tmp_path / "w"
+    (work / "restab").mkdir(parents=True)
+    (work / "frames_0.csv").write_text("frame\n")
+    inside = work / "restab" / "input.mp4"
+    shutil.copy(tiny_video, inside)
+    proc = run_script("run_extract_all.py", inside, "--out-dir", work, "--overwrite")
+    assert proc.returncode != 0 and "input video" in proc.stderr + proc.stdout
+    assert inside.exists() and (work / "frames_0.csv").exists()
+
+
+def test_open_video_reopens_when_it_cannot_rewind(monkeypatch, tiny_video):
+    opened = []
+
+    class NoSeek:
+        """Decodes frames but can't seek back to frame 0."""
+        def __init__(self, *_):
+            opened.append(self)
+            self.pos = 0
+        def isOpened(self):
+            return True
+        def get(self, prop):
+            if prop == cv2.CAP_PROP_POS_FRAMES:
+                return self.pos
+            return 25.0 if prop == cv2.CAP_PROP_FPS else 100.0
+        def read(self):
+            self.pos += 1
+            return True, None
+        def set(self, prop, value):
+            return False
+        def release(self):
+            pass
+    monkeypatch.setattr(videoinfo.cv2, "VideoCapture", NoSeek)
+    cap, _, _ = videoinfo.open_video(tiny_video)
+    assert len(opened) == 2 and cap is opened[1] and cap.pos == 0

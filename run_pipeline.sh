@@ -70,7 +70,13 @@ if [[ -e "$analysis_dir" || -e "$annotated" ]] && [[ $overwrite -eq 0 ]]; then
     die "$out_dir already has results from an earlier run; use --overwrite or another --out-dir"
 fi
 if [[ $overwrite -eq 1 ]]; then
-    # results of the earlier run that this run may not replace (e.g. with --no-video)
+    # results of the earlier run that this run may not replace (e.g. with --no-video); never
+    # the input itself (-ef: same file, including a hard link or symlink to it)
+    for old in "$annotated" "${annotated%.mp4}.nochapters.mp4"; do
+        if [[ -e "$old" && "$old" -ef "$video" ]]; then
+            die "the input video is $old, which --overwrite would delete; move it or use another --out-dir"
+        fi
+    done
     rm -f "$annotated" "${annotated%.mp4}.nochapters.mp4"
 fi
 

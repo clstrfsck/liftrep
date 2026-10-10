@@ -18,7 +18,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from device import describe, pick_device
-from videoinfo import open_video
+from videoinfo import open_video, same_file
 
 ap = argparse.ArgumentParser()
 ap.add_argument("video")
@@ -66,6 +66,12 @@ if stale:
         raise SystemExit(f"{out_dir} already holds pass-1 files from an earlier run "
                          f"({', '.join(p.name for p in stale[:4])}{', ...' if len(stale) > 4 else ''}). "
                          "Use another --out-dir, or --overwrite to delete them.")
+    # never delete the input video (it could be inside the old restab/ folder, or be a link)
+    src = Path(args.video).resolve()
+    for p in stale:
+        if same_file(p, args.video) or (p.is_dir() and src.is_relative_to(p.resolve())):
+            raise SystemExit(f"--overwrite would delete the input video ({args.video}); "
+                             "move it out of the working folder or use another --out-dir")
     for p in stale:
         if p.is_dir():
             shutil.rmtree(p)
