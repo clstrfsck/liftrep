@@ -139,8 +139,11 @@ FONT = cv2.FONT_HERSHEY_SIMPLEX
 def text(img, s, org, scale=0.55, color=WHITE, thick=1, box=True):
     """Text with its baseline-left corner at org; on a dark box so it reads on any background."""
     x, y = int(org[0]), int(org[1])
+    (w, h), base = cv2.getTextSize(s, FONT, scale, thick + 1)
+    # keep the label inside the frame (lines may run off the edge when the screen does)
+    x = min(max(x, 4), img.shape[1] - w - 4)
+    y = min(max(y, h + 4), img.shape[0] - base - 4)
     if box:
-        (w, h), base = cv2.getTextSize(s, FONT, scale, thick + 1)
         cv2.rectangle(img, (x - 3, y - h - 3), (x + w + 3, y + base + 1), (25, 25, 25), -1)
     cv2.putText(img, s, (x, y), FONT, scale, color, thick + 1 if box else thick, cv2.LINE_AA)
 
@@ -167,6 +170,8 @@ def geometry(f):
     if lv is None:
         return None
     top_y, bot_y, cx = lv
+    if not np.all(np.isfinite([top_y, bot_y, cx])):
+        return None  # no measured level for this rep: draw nothing rather than guess
     L = float(half_len.get(clip_id, 120))
     ex = cx - L - 18
     g = {"clip": clip_id}

@@ -313,15 +313,19 @@ then measures the phases and dwells around the top and bottom levels found that 
 
 - **Moving / stationary** – the bar is moving when its speed exceeds 12% of that phase's peak
   speed and 15 stabilised px/s (`V_STILL_FRAC`, `V_STILL_MIN`); a movement ends after 2
-  stationary frames (`STILL_FRAMES`), but only within 30% of the travel from the top
-  (`NEAR_TOP_FRAC`). A pause partway up or down (a sticking point) therefore stays inside
-  the effort or lowering phase, and a stationary bar at another height (in the rack, during
-  set-up) never becomes part of a rep.
+  stationary frames (`STILL_FRAMES`), judged on a 5-frame rolling median of the velocity so
+  single jittery frames don't count. A rep's peak speeds come from the descent leading into
+  its bottom and the ascent leaving it, not from movement elsewhere. On the way **up**, the movement only ends within 30% of the
+  travel from the top (`NEAR_TOP_FRAC`), so a brief pause partway up (a sticking point)
+  stays inside the effort phase; stillness longer than 1 s (`MAX_STALL_S`) ends it anyway.
+  A stationary bar at another height (in the rack, during set-up, paused playback)
+  therefore never becomes part of a rep.
 - **Top of travel** – the bar's level just before the lowering starts (and just after the
   effort phase ends, for the top after the rep); the reported point is the highest point of
   the top dwell.
 - **Bottom of travel** – the lowest point between the start of lowering and the end of the
-  effort phase.
+  effort phase. Tops and bottoms are taken only from frames where the bar was actually seen
+  (or bridged over a gap of under 0.5 s), never from values extended past the clip's data.
 - **Dwell** – time the bar stays within 10% of the rep's range of the top or bottom level
   (`DWELL_BAND`).
 - **Lowering (eccentric)** – end of top dwell → start of bottom dwell.
@@ -363,7 +367,8 @@ onset and stop times, top and bottom levels, and range against the minimum range
 - **Side-view bench press with heavy plates** – the plate hides the hands, so the wrist
   keypoints are often missing or misplaced. Reps in these clips are
   frequently marked `check`; tracking the plate itself would be more reliable here.
-- **Blocks are numbered, not named.** Mapping blocks and clips to the athlete and load conditions has to come from the study protocol.
+- **Blocks are numbered, not named.** Mapping blocks and clips to the athlete and load
+  conditions has to come from the study protocol.
 
 ## Other scripts (diagnostics)
 
@@ -377,3 +382,16 @@ onset and stop times, top and bottom levels, and range against the minimum range
 | `scripts/annotate_video.py` | Pass 3: annotated video (see above) |
 | `scripts/add_chapters.py VIDEO ANALYSIS_DIR OUT.mp4 [--offset S]` | Add clip / lift / rep chapters to a video without re-encoding |
 | `scripts/device.py` | Shared helper: picks the compute device (not run directly) |
+
+## Licence
+
+The code in this repository is released under the MIT licence (see [LICENSE.md](LICENSE.md)).
+
+The pose-estimation step depends on [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
+and its pretrained `yolo11*-pose` weights, which are licensed under **AGPL-3.0**. Using or
+distributing the full pipeline (pass 1 in particular) is therefore subject to the AGPL's terms
+as well; Ultralytics offers a commercial licence for uses that can't meet them. The other
+dependencies (OpenCV, NumPy, SciPy, pandas, matplotlib, PyTorch) use permissive licences.
+
+No study data is included: video, eye-tracker exports and all generated outputs are excluded
+by `.gitignore`.

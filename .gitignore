@@ -13,3 +13,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Analysis write-up (participant-derived results; keep private)
+ANALYSIS.md

@@ -33,7 +33,8 @@ DWELL_BAND = 0.10         # within 10% of rep range of the top/bottom level = "d
 V_STILL_FRAC = 0.12       # moving = faster than 12% of the phase's peak speed...
 V_STILL_MIN = 15.0        # ... and faster than 15 stab px/s; otherwise stationary
 STILL_FRAMES = 2          # consecutive stationary frames that end a movement
-NEAR_TOP_FRAC = 0.3       # ... and only when within 30% of the travel from the top
+NEAR_TOP_FRAC = 0.3       # ... and only when within 30% of the travel from the top,
+MAX_STALL_S = 1.0         # ... unless stationary this long (longer than a sticking point)
 REF_DEV_FRAC = 0.12       # stationary body reference this far (x body height) from its
                           # local median = stabilisation glitch in that frame
 HEAD_FAST_PX = 12.0       # observer head speed (scene px/frame) treated as fast
@@ -255,19 +256,35 @@ for ci, r in enumerate(runs, start=1):
 
     vfill = pd.Series(vy).interpolate(limit_direction="both").fillna(0).to_numpy(copy=True)  # px/s, +ve down
 
-    def walk(i, step, stop, moving):
-        """From i, step while `moving(j)` holds; stop after STILL_FRAMES non-moving frames
-        in a row or at `stop`. Returns the last moving index."""
+    def walk(i, step, stop, moving, near=lambda j: True):
+        """From i, step while the bar keeps moving; returns the last moving index.
+
+        The movement ends after STILL_FRAMES stationary frames in a row if the bar is
+        `near` the top there, or after MAX_STALL_S of stillness anywhere (a sticking point
+        is brief; a long stationary period is set-up, a hold or paused playback), or at
+        `stop`."""
         j, still, last = i, 0, i
+        max_stall = int(round(MAX_STALL_S * FPS))
         while (j + step - stop) * step <= 0:
             j += step
             if moving(j):
                 still, last = 0, j
             else:
                 still += 1
-                if still >= STILL_FRAMES:
+                if (still >= STILL_FRAMES and near(j)) or still >= max_stall:
                     break
         return last
+
+    # moving / stationary is judged on a 5-frame rolling median of the velocity, so single
+    # jittery frames can't break up a stationary period
+    vmed = pd.Series(vfill).rolling(5, center=True, min_periods=1).median().to_numpy()
+    v_floor = V_STILL_MIN
+    real_y = np.where(ok, yfill, np.nan)  # data only where the bar was seen (or briefly bridged)
+
+    def argext(a, b, fn):
+        """Index of the extreme of the real data in a..b, or None if there is none."""
+        seg = real_y[a:b + 1]
+        return None if np.all(np.isnan(seg)) else a + int(fn(seg))
 
     def band_run(i, inside, lo, hi):
         """Contiguous run of frames around i (within lo..hi) where inside[j] holds."""
@@ -293,26 +310,43 @@ for ci, r in enumerate(runs, start=1):
       for k, b in enumerate(bots):
         lo = bots[k - 1] if k > 0 else 0
         hi = bots[k + 1] if k + 1 < len(bots) else len(yfill) - 1
-        i_pd = lo + int(np.argmax(vfill[lo:b + 1]))      # peak lowering speed
-        i_pu = b + int(np.argmin(vfill[b:hi + 1]))       # peak lifting speed (most negative)
-        if vfill[i_pd] <= V_STILL_MIN or -vfill[i_pu] <= V_STILL_MIN:
+        # peak speeds of the descent leading into this bottom and the ascent leaving it:
+        # the contiguous downward (upward) movement next to the bottom, not the fastest
+        # movement anywhere in the window
+        # (step over the bottom dwell first: the bar is momentarily still at the bottom)
+        max_skip = int(round(0.5 * FPS))
+        d0, skip = b, 0
+        while d0 > lo and vmed[d0 - 1] <= v_floor and skip < max_skip:
+            d0, skip = d0 - 1, skip + 1
+        while d0 > lo and vmed[d0 - 1] > v_floor:
+            d0 -= 1
+        u1, skip = b, 0
+        while u1 < hi and -vmed[u1 + 1] <= v_floor and skip < max_skip:
+            u1, skip = u1 + 1, skip + 1
+        while u1 < hi and -vmed[u1 + 1] > v_floor:
+            u1 += 1
+        i_pd = d0 + int(np.argmax(vfill[d0:b + 1]))      # peak lowering speed
+        i_pu = b + int(np.argmin(vfill[b:u1 + 1]))       # peak lifting speed (most negative)
+        if vfill[i_pd] <= v_floor or -vfill[i_pu] <= v_floor:
             continue
-        thr_d = max(V_STILL_FRAC * vfill[i_pd], V_STILL_MIN)
-        thr_u = max(V_STILL_FRAC * -vfill[i_pu], V_STILL_MIN)
-        # The bar only counts as stopped when it is stationary *near the top* (within
-        # NEAR_TOP_FRAC of the travel from the highest point either side). A stall partway up
-        # or down (a sticking point) stays inside the effort / lowering phase.
-        hi_b = float(yfill[lo:b + 1].min())
+        thr_d = max(V_STILL_FRAC * vfill[i_pd], v_floor)
+        thr_u = max(V_STILL_FRAC * -vfill[i_pu], v_floor)
+        # On the way up the bar only counts as stopped when it is stationary *near the top*
+        # (within NEAR_TOP_FRAC of the travel from the highest point after the bottom), so a
+        # brief stall partway up (a sticking point) stays inside the effort phase.
         hi_a = float(yfill[b:hi + 1].min())
-        near_b = lambda j: yfill[j] <= hi_b + NEAR_TOP_FRAC * (yfill[b] - hi_b)
         near_a = lambda j: yfill[j] <= hi_a + NEAR_TOP_FRAC * (yfill[b] - hi_a)
-        ecc_s = walk(i_pd, -1, lo, lambda j: vfill[j] > thr_d or not near_b(j))  # descent onset
-        con_e = walk(i_pu, +1, hi, lambda j: -vfill[j] > thr_u or not near_a(j))  # ascent stop
+        # descent onset: where the bar was last stationary (sticking points happen on the
+        # way up, so no near-the-top requirement here)
+        ecc_s = walk(i_pd, -1, lo, lambda j: vmed[j] > thr_d)
+        con_e = walk(i_pu, +1, hi, lambda j: -vmed[j] > thr_u, near_a)  # ascent stop
         # top levels: the bar just outside the movement (a few frames' median)
         pre = yfill[max(lo, ecc_s - 3):ecc_s + 1]
         post = yfill[con_e:min(hi, con_e + 3) + 1]
         top_lv_b, top_lv_a = float(np.median(pre)), float(np.median(post))
-        bottom = ecc_s + int(np.argmax(yfill[ecc_s:con_e + 1]))
+        bottom = argext(ecc_s, con_e, np.nanargmax)
+        if bottom is None:
+            continue
         bot_lv = yfill[bottom]
         rep_range = bot_lv - max(top_lv_b, top_lv_a)
         if DEBUG_CLIP == ci:
@@ -324,8 +358,10 @@ for ci, r in enumerate(runs, start=1):
         tb_s, tb_e = band_run(ecc_s, yfill <= top_lv_b + band, lo, bottom)
         ta_s, ta_e = band_run(con_e, yfill <= top_lv_a + band, bottom, hi)
         bo_s, bo_e = band_run(bottom, yfill >= bot_lv - band, tb_e, ta_s)
-        top_before = tb_s + int(np.argmin(yfill[tb_s:tb_e + 1]))
-        top_after = ta_s + int(np.argmin(yfill[ta_s:ta_e + 1]))
+        top_before = argext(tb_s, tb_e, np.nanargmin)
+        top_after = argext(ta_s, ta_e, np.nanargmin)
+        if top_before is None or top_after is None:
+            continue
         spike = (t[bo_s] - t[tb_e] < MIN_ECCENTRIC_S) or (t[ta_s] - t[bo_e] < MIN_EFFORT_S)
         reps.append(dict(top_before=top_before, tb=(tb_s, tb_e), bottom=bottom, bo=(bo_s, bo_e),
                          top_after=top_after, ta=(ta_s, ta_e), range=rep_range, spike=spike,
