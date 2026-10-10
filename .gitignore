@@ -1,0 +1,15 @@
+# Source data (large, and participant data)
+*.mp4
+*.tsv
+
+# Generated outputs and downloaded models
+work/
+models/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

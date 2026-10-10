@@ -1,0 +1,6 @@
+# Install PyTorch first on Windows/NVIDIA machines (see README), then: pip install -r requirements.txt
+ultralytics==8.4.175   # pinned: the scripts use its `quantize` predict option
+opencv-python>=4.9     # use opencv-python-headless instead on servers without a display
+scipy>=1.11
+pandas>=2.1
+matplotlib>=3.8
