@@ -212,6 +212,7 @@ rep's lines appear at once. With the 0.4 s default, frame-to-frame shake of the 
 about tenfold, and the lines stay within a median 2 px
 (95th percentile 12 px, during fast head movement) of the unsmoothed position. Longer
 windows are steadier but drift further from the picture when the head moves quickly.
+The output path must differ from the source video; the script refuses to write over it.
 Frames outside lift clips are copied unchanged, so a whole-video render keeps the original
 timing (output frame N = input frame N) and can be lined up with other data recorded on the
 same timeline (e.g. gaze).
