@@ -1,5 +1,7 @@
 """Open a video and check its basic properties before any script relies on them."""
 import math
+import os
+from pathlib import Path
 
 import cv2
 
@@ -22,7 +24,21 @@ def open_video(path):
     if not (math.isfinite(n_frames) and n_frames > 0):
         cap.release()
         raise SystemExit(f"{path}: unusable frame count ({n_frames})")
+    # a damaged file can have valid metadata: make sure a frame actually decodes
+    ok, _ = cap.read()
+    if not ok:
+        cap.release()
+        raise SystemExit(f"{path}: no frame could be decoded (damaged or unsupported video?)")
+    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     return cap, fps, int(n_frames)
+
+
+def same_file(a, b):
+    """True if paths a and b name the same file: the same path, a symlink to it, or a hard
+    link to it (an existing hard link has a different path but the same inode)."""
+    if os.path.exists(a) and os.path.exists(b):
+        return os.path.samefile(a, b)
+    return Path(a).resolve() == Path(b).resolve()
 
 
 def check_time(t, duration, name="time"):

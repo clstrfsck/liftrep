@@ -19,7 +19,7 @@ import tempfile
 from pathlib import Path
 
 import pandas as pd
-from videoinfo import open_video
+from videoinfo import open_video, same_file
 
 
 def chapters(analysis_dir, offset, duration, fps=25.0):
@@ -68,7 +68,7 @@ def write_with_chapters(video, analysis_dir, out, offset=0.0):
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise SystemExit("ffmpeg not found on the PATH")
-    if Path(video).resolve() == Path(out).resolve():
+    if same_file(video, out):
         raise SystemExit("OUT must be a different file from VIDEO")
     cap, fps, n_frames = open_video(video)
     duration = n_frames / fps

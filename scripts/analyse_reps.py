@@ -453,11 +453,15 @@ def analyse_clip(ci, r):
         reps = [rp for rp in build([b for b in bots if b not in spikes]) if not rp["spike"]]
     med_range = np.median([rp["range"] for rp in reps]) if reps else np.nan
     for rp in reps:
-        rp["status"] = "partial" if rp["range"] < PARTIAL_RANGE_FRAC * med_range else "ok"
         # a lowering or effort phase containing an unbridged tracking gap wasn't observed: its
-        # timings are interpolation, so the rep is listed but not counted
-        if rp["status"] == "ok" and gap_len[rp["tb"][1]:rp["ta"][0] + 1].max() > 0:
+        # timings are interpolation, so the rep is listed but not counted (this takes precedence
+        # over "partial", whose range would itself be interpolated)
+        if gap_len[rp["tb"][1]:rp["ta"][0] + 1].max() > 0:
             rp["status"] = "indeterminate"
+        elif rp["range"] < PARTIAL_RANGE_FRAC * med_range:
+            rp["status"] = "partial"
+        else:
+            rp["status"] = "ok"
     n_spikes = len(spikes)
 
     n_ok = 0
@@ -530,8 +534,7 @@ def analyse_clip(ci, r):
         "hip_below_shoulder": round(hip_below_sho, 3), "box_aspect": round(aspect, 2),
         "stab_valid_frac": round(stab_valid, 3), "glitch_frames_masked": n_glitch,
         # total unbridged tracking gap time: reps can hide in it, so n_reps is a lower bound
-        "unbridged_gap_s": round(float(sum(b_ - a_ + 1 for a_, b_ in runs_of(gap)
-                                           if a_ > 0 and b_ < len(gap) - 1)) / FPS, 2),
+        "unbridged_gap_s": round(float(gap.sum()) / FPS, 2),  # interior and edge gaps
         # times of possible changes of on-screen video inside this clip (for review)
         "possible_video_change_t": " ".join(f"{v:.1f}" for v in d.t[d.get("video_change", 0) == 1])
                                    if "video_change" in d else "",

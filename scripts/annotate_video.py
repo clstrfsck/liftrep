@@ -32,7 +32,7 @@ import cv2
 import numpy as np
 import pandas as pd
 from add_chapters import write_with_chapters
-from videoinfo import check_time, open_video
+from videoinfo import check_time, open_video, same_file
 
 ap = argparse.ArgumentParser()
 ap.add_argument("video")
@@ -289,9 +289,8 @@ final_out = args.out
 if ffmpeg and not args.no_chapters:  # render to a temporary file, then remux with chapters
     args.out = str(Path(final_out).with_suffix(".nochapters.mp4"))
 # never write over the source video: neither the output nor the temporary render may be it
-source = Path(args.video).resolve()
 for target in {final_out, args.out}:
-    if Path(target).resolve() == source:
+    if same_file(target, args.video):
         raise SystemExit(f"refusing to write {target}: it is the source video. Choose another output path.")
 if ffmpeg:
     cmd = [ffmpeg, "-v", "error", "-y",

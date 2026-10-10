@@ -69,6 +69,10 @@ annotated="$out_dir/annotated.mp4"
 if [[ -e "$analysis_dir" || -e "$annotated" ]] && [[ $overwrite -eq 0 ]]; then
     die "$out_dir already has results from an earlier run; use --overwrite or another --out-dir"
 fi
+if [[ $overwrite -eq 1 ]]; then
+    # results of the earlier run that this run may not replace (e.g. with --no-video)
+    rm -f "$annotated" "${annotated%.mp4}.nochapters.mp4"
+fi
 
 step() { echo; echo "=== $* ($(date +%H:%M:%S))"; }
 start=$SECONDS

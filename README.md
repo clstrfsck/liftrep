@@ -133,7 +133,7 @@ cost in keypoint accuracy.
 Runs pass 1 and 1b (pose extraction and re-stabilisation), pass 2 (rep analysis) and pass 3
 (annotated video with chapters) in order. Results go to `work/<video name>/`: the analysis in
 `out/` and the video as `annotated.mp4`. Options: `--out-dir DIR`, `--jobs N`, `--device DEV`,
-`--model PATH`, `--overwrite` (replace an earlier run's results; otherwise the script stops),
+`--model PATH`, `--overwrite` (replace an earlier run's results, including an earlier annotated video even with `--no-video`; otherwise the script stops),
 `--no-video` (skip pass 3); `./run_pipeline.sh --help` lists them. It can be run from any
 folder. It needs bash (macOS, Linux, or Git Bash/WSL on Windows); the individual passes below
 work on any OS.
@@ -295,7 +295,7 @@ Use `--offset S` there if the video was rendered from a time range starting at `
 | `valid_kp_frac` | Fraction of frames with a confident bar-proxy keypoint |
 | `stab_valid_frac` | Fraction of frames with a valid stabilising transform |
 | `glitch_frames_masked` | Frames masked as stabilisation glitches before rep detection |
-| `unbridged_gap_s` | Total time (s) of unbridged tracking gaps in the clip. A rep can hide completely in a gap, so where this is large `n_reps` may undercount |
+| `unbridged_gap_s` | Total time (s) in the clip without an observed (or briefly bridged) bar position, including at the clip's start and end. A rep can hide completely in a gap, so where this is large `n_reps` may undercount |
 | `hip_below_shoulder`, `box_aspect` | Lift classification features (squat if `hip_below_shoulder` > 0.2) |
 | `possible_video_change_t` | Times (s) of possible changes of on-screen video inside the clip, flagged by pass 1b for review (empty if none) |
 | `skipped` | Reason, if the clip could not be analysed: too few frames with a tracked bar proxy, or mostly unregistered (otherwise empty) |
@@ -305,7 +305,7 @@ Use `--offset S` there if the video was rendered from a time range starting at `
 | Column | Meaning |
 |---|---|
 | `clip`, `block`, `rep`, `lift` | Identifiers. `rep` is numbered over counted reps only |
-| `rep_status` | `ok` (counted); `partial` (< 50% of the clip's median range); or `indeterminate` (the lowering or effort phase spans an unbridged tracking gap, so its timings are interpolated). Only `ok` reps are counted, numbered, and given events, chapters and overlays |
+| `rep_status` | `ok` (counted); `partial` (< 50% of the clip's median range); or `indeterminate` (the lowering or effort phase spans an unbridged tracking gap, so its timings are interpolated; this takes precedence over `partial`, since the range would be interpolated too). Only `ok` reps are counted, numbered, and given events, chapters and overlays |
 | `rep_start_t`, `rep_end_t`, `rep_duration_s` | Rep = leave top → arrive back at top |
 | `top_*`, `bottom_*` | Top / bottom of travel: `_t`, `_frame`, `_rec_us`, `_scene_x/y`, `_stab_x/y` |
 | `top_dwell_before_s`, `bottom_dwell_s`, `top_dwell_after_s` | Dwell durations |
@@ -460,8 +460,10 @@ uv pip install --python .venv -r requirements-dev.txt
   never overwriting the source video, stale files, invalid `--jobs`, unreadable videos).
 
 ```bash
-.venv/bin/python -m pytest tests
+.venv/bin/python -m pytest
 ```
+
+(`pytest.ini` limits test discovery to `tests/`.)
 
 Pass 1 (pose estimation) and pass 1b (registration) are not covered by the tests, as they
 need real footage.

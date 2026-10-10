@@ -128,3 +128,26 @@ def test_old_plots_are_removed(tmp_path):
     analyse(tmp_path, session_frames(bar_trace()))
     assert not (out / "plots" / "clip_99.png").exists()
     assert (out / "plots" / "clip_01.png").exists()
+
+
+def test_shallow_rep_spanning_a_gap_is_indeterminate_not_partial(tmp_path):
+    # four full reps, then a shallow one (40% of the range) with a gap inside its lowering
+    y = list(bar_trace(n_reps=4, tail_s=0.0))
+    shallow_start = len(y)
+    y += list(bar_trace(setup_s=0.0, n_reps=1, bottom=440.0))
+    frames = session_frames(np.array(y))
+    gap_s = shallow_start / FPS + 0.04
+    frames = hide_wrists(frames, gap_s, 0.56)
+    _, out = analyse(tmp_path, frames)
+    reps = read(out, "reps.csv")
+    shallow = reps[reps.bottom_t > shallow_start / FPS]
+    assert len(shallow) == 1 and shallow.rep_status.iloc[0] == "indeterminate"
+
+
+def test_edge_gaps_count_as_unbridged_time(tmp_path):
+    # the bar isn't seen for the clip's first second (e.g. registration failed there)
+    frames = hide_wrists(session_frames(bar_trace(n_reps=6)), 0.0, 1.0)
+    _, out = analyse(tmp_path, frames)
+    clip = read(out, "clips.csv").iloc[0]
+    assert clip.unbridged_gap_s == pytest.approx(1.0, abs=0.05)
+    assert clip.n_reps == 6

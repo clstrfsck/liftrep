@@ -1,7 +1,13 @@
 """Input validation and safety checks of the command-line scripts."""
+import os
+import subprocess
+
+import cv2
 import pytest
-from conftest import analyse, bar_trace, run_script, session_frames
-from videoinfo import check_time, open_video
+import torch
+import videoinfo
+from conftest import ROOT, analyse, bar_trace, run_script, session_frames
+from videoinfo import check_time, open_video, same_file
 
 
 def test_open_video_rejects_a_missing_file(tmp_path):
@@ -92,3 +98,67 @@ def test_screen_probe_skips_times_outside_the_video(tmp_path, tiny_video):
     proc = run_script("screen_probe.py", tiny_video, tmp_path / "sp", "1", "99")
     assert proc.returncode == 0, proc.stderr
     assert "99.0: outside the video" in proc.stdout
+
+
+def test_annotation_refuses_a_hard_link_to_its_source(tmp_path, tiny_video):
+    out = empty_analysis(tmp_path)
+    link = tmp_path / "link.mp4"
+    os.link(tiny_video, link)  # different path, same file
+    before = tiny_video.read_bytes()
+    proc = run_script("annotate_video.py", tiny_video, out, link)
+    assert proc.returncode != 0 and "source video" in proc.stderr + proc.stdout
+    assert tiny_video.read_bytes() == before
+
+
+def test_add_chapters_refuses_a_hard_link_to_its_input(tmp_path, tiny_video):
+    out = empty_analysis(tmp_path)
+    link = tmp_path / "link.mp4"
+    os.link(tiny_video, link)
+    proc = run_script("add_chapters.py", tiny_video, out, link)
+    assert proc.returncode != 0 and "different file" in proc.stderr + proc.stdout
+
+
+def test_same_file():
+    assert same_file(__file__, __file__)
+    assert same_file(__file__, os.path.join(os.path.dirname(__file__), ".", os.path.basename(__file__)))
+    assert not same_file(__file__, "no/such/file.mp4")
+
+
+def test_open_video_rejects_a_video_whose_frames_dont_decode(monkeypatch, tiny_video):
+    class Undecodable:
+        """Valid-looking metadata, but no frame can be read (as with a damaged file)."""
+        def isOpened(self):
+            return True
+        def get(self, prop):
+            return 25.0 if prop == cv2.CAP_PROP_FPS else 100.0
+        def read(self):
+            return False, None
+        def release(self):
+            pass
+    monkeypatch.setattr(videoinfo.cv2, "VideoCapture", lambda *_: Undecodable())
+    with pytest.raises(SystemExit, match="no frame could be decoded"):
+        videoinfo.open_video(tiny_video)
+
+
+@pytest.mark.skipif(torch.cuda.is_available(), reason="needs a machine without an NVIDIA GPU")
+def test_pipeline_overwrite_removes_the_old_annotated_video(tmp_path, tiny_video):
+    work = tmp_path / "w"
+    (work / "out").mkdir(parents=True)
+    old = work / "annotated.mp4"
+    old.write_bytes(b"old video")
+    # --device cuda stops pass 1 straight away on this machine; the old video must already be gone
+    proc = subprocess.run([str(ROOT / "run_pipeline.sh"), str(tiny_video), "--out-dir", str(work),
+                           "--overwrite", "--no-video", "--device", "cuda"],
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode != 0
+    assert not old.exists()
+
+
+def test_pipeline_refuses_earlier_results_without_overwrite(tmp_path, tiny_video):
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "annotated.mp4").write_bytes(b"old video")
+    proc = subprocess.run([str(ROOT / "run_pipeline.sh"), str(tiny_video), "--out-dir", str(work)],
+                          capture_output=True, text=True, check=False)
+    assert proc.returncode != 0 and "earlier run" in proc.stderr
+    assert (work / "annotated.mp4").read_bytes() == b"old video"
