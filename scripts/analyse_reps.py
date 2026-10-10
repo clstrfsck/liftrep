@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 FPS = 25.0                # fallback only: replaced by the rate measured from the input below
 KP_MIN_CONF = 0.5
 MIN_CLIP_S = 8.0          # shortest run of lifter detections treated as a clip
+MIN_REGISTERED_FRAC = 0.5 # clips with less than half their frames stabilised are skipped
 MAX_BRIDGE_S = 0.5        # tracking gaps up to this long are bridged by interpolation;
                           # longer gaps are left as gaps (never filtered or measured across)
 MAX_GAP_S = 1.5           # detection gaps bridged inside a clip
@@ -214,19 +215,14 @@ def kp_mean(d, names):
 
 
 # ---------------------------------------------------------------- clip detection
-has_person = (df.p_conf.fillna(0) >= 0.4) & df.seg_id.notna()
-frames = df.frame.values
-runs, cur = [], None
-for f, hp, seg in zip(frames, has_person.values, df.seg_id.values):
-    if hp:
-        if cur and seg == cur["seg"] and f - cur["end"] <= MAX_GAP_S * FPS:
-            cur["end"] = f
-        else:
-            if cur:
-                runs.append(cur)
-            cur = {"start": f, "end": f, "seg": seg}
-if cur:
-    runs.append(cur)
+# Clips are the ones found by restabilise.py (pass 1b), identified by seg_id: runs of athlete
+# detections, split where the video on screen changes. A clip spans its first to last frame
+# with the athlete detected; frames inside it that couldn't be registered stay in as gaps.
+has_person = df.p_conf.fillna(0) >= 0.4
+runs = []
+for seg, g in df[df.seg_id.notna() & has_person].groupby("seg_id"):
+    runs.append({"start": int(g.frame.min()), "end": int(g.frame.max()), "seg": seg})
+runs.sort(key=lambda r: r["start"])
 runs = [r for r in runs if (r["end"] - r["start"]) / FPS >= MIN_CLIP_S]
 
 clip_rows, rep_rows, event_rows = [], [], []
@@ -234,10 +230,17 @@ frame_tables = []  # per-frame rep/phase + stabilisation, for annotate_video.py
 
 for ci, r in enumerate(runs, start=1):
     d = df.loc[r["start"]:r["end"]].copy()
-    d = d[d.seg_id == r["seg"]]
+    d.loc[d.seg_id != r["seg"], H_COLS] = np.nan  # unregistered frames: kept, as gaps
     t = d.t.values
 
     d, stab_valid = rebase(d)
+    if stab_valid < MIN_REGISTERED_FRAC:
+        clip_rows.append({"clip": ci, "start_t": round(t[0], 3), "end_t": round(t[-1], 3),
+                          "start_frame": int(d.frame.values[0]), "end_frame": int(d.frame.values[-1]),
+                          "duration_s": round(t[-1] - t[0], 2), "n_reps": 0,
+                          "stab_valid_frac": round(stab_valid, 3),
+                          "skipped": "mostly unregistered (observer moving or looking away)"})
+        continue
 
     # --- lift type: in a squat the athlete is upright, so the hips sit well below the
     # shoulders (relative to body height); lying on a bench they are level.
@@ -528,6 +531,9 @@ for ci, r in enumerate(runs, start=1):
         "robust_range_stab_px": round(float(robust), 1), "valid_kp_frac": round(float(valid_frac), 3),
         "hip_below_shoulder": round(hip_below_sho, 3), "box_aspect": round(aspect, 2),
         "stab_valid_frac": round(stab_valid, 3), "glitch_frames_masked": n_glitch,
+        # times of possible changes of on-screen video inside this clip (for review)
+        "possible_video_change_t": " ".join(f"{v:.1f}" for v in d.t[d.get("video_change", 0) == 1])
+                                   if "video_change" in d else "",
     })
 
     # --- per-frame table for annotate_video.py: which rep / phase each frame is in, the
@@ -590,9 +596,9 @@ if len(reps_df):
         c["n_reps_tracking_good"] = int(good.get(c["clip"], 0))
 block, prev_lift = 0, None
 for c in clip_rows:
-    if c["lift"] != prev_lift:
+    if c.get("lift") is not None and c["lift"] != prev_lift:  # skipped clips have no lift
         block, prev_lift = block + 1, c["lift"]
-    c["block"] = block
+    c["block"] = max(block, 1)
 if len(reps_df):
     reps_df.insert(1, "block", reps_df["clip"].map({c["clip"]: c["block"] for c in clip_rows}))
 reps_df.to_csv(out_dir / "reps.csv", index=False)

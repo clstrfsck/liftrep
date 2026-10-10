@@ -24,6 +24,8 @@ def chapters(analysis_dir, offset, duration, fps=25.0):
     reps = pd.read_csv(adir / "reps.csv")
     reps = reps[reps.rep_status == "ok"]
     marks = []  # (source start time, title); each chapter runs to the next mark
+    if "skipped" in clips:
+        clips = clips[clips["skipped"].isna()]  # skipped clips (no analysis) get no chapters
     for _, c in clips.sort_values("start_t").iterrows():
         cid = int(c["clip"])
         name = f"Clip {cid} - {c['lift'].replace('_', ' ')} (block {int(c['block'])})"

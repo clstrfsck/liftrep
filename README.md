@@ -30,19 +30,27 @@ rep features are derived from the bar's vertical motion.
 
 1b. **Pass 1b – re-stabilisation** (`scripts/restabilise.py`, CPU, ≈ 5–10 min; **required**,
    and run automatically after pass 1)
-   - Finds the lift clips from the pass-1 person detections.
+   - Finds the lift clips from the pass-1 person detections (runs with gaps under 1.5 s).
+     These are the clips used by every later step.
    - Per clip, picks a sharp reference frame from the middle and matches every frame
      **directly** to it. A frame that can't be matched directly is matched to the nearest
      registered keyframe, so a transform is never more than two links from the reference.
    - Rejects transforms whose rotation, shear or scale at the athlete is implausible.
+   - Flags possible changes of on-screen video inside a clip (back-to-back videos with no
+     gap): frames ~0.25 s apart are aligned and their static content compared, and a change
+     is confirmed only if no sharp frame within 2 s before it matches one within 2 s after.
+     These are **flagged, not used to split clips**: fast head movement and the screen leaving
+     the view produce the same signal, so splitting would cut real clips apart.
+   - Seeds its random sampling (RANSAC) per clip, so re-runs give identical results.
    - Writes a copy of the per-frame data with the stabilisation replaced.
    - Also joins the pass-1 chunks: each chunk numbers its segments from 0 and chains its own
      transforms, so a lift crossing a chunk boundary would otherwise be split, or merged
      across unrelated coordinate systems. Pass 2 therefore refuses raw pass-1 files.
 
 2. **Pass 2 – rep analysis** (`scripts/analyse_reps.py`, fast, seconds)
-   - Splits the session into lift clips (continuous runs where an athlete is on screen),
-     and groups consecutive clips of the same lift into blocks.
+   - Uses the clips found by pass 1b, and groups consecutive clips of the same lift into
+     blocks. Frames inside a clip that pass 1b couldn't register are kept as tracking gaps;
+     clips with less than half their frames registered are skipped (`MIN_REGISTERED_FRAC`).
    - Re-bases the stabilisation on a frame inside each clip and rejects frames whose
      transform is implausible (scale, position, rotation or shear at the athlete).
    - Classifies each clip as **bench press** or **squat**: an upright athlete's hips sit well
@@ -263,7 +271,8 @@ Use `--offset S` there if the video was rendered from a time range starting at `
 | `stab_valid_frac` | Fraction of frames with a valid stabilising transform |
 | `glitch_frames_masked` | Frames masked as stabilisation glitches before rep detection |
 | `hip_below_shoulder`, `box_aspect` | Lift classification features (squat if `hip_below_shoulder` > 0.2) |
-| `skipped` | Reason, if the clip could not be analysed (otherwise empty) |
+| `possible_video_change_t` | Times (s) of possible changes of on-screen video inside the clip, flagged by pass 1b for review (empty if none) |
+| `skipped` | Reason, if the clip could not be analysed: too few frames with a tracked bar proxy, or mostly unregistered (otherwise empty) |
 
 ### `reps.csv` – one row per rep
 
@@ -377,6 +386,10 @@ onset and stop times, top and bottom levels, and range against the minimum range
   show as `timing_outlier`; review them on the QA plot.
 - **Clips are numbered in playing order**, not by condition. Clips replayed or scrubbed by
   the operator can appear as extra or split clips.
+- **Back-to-back videos may form one clip.** If the next video starts within 1.5 s, both
+  become one clip: rep numbering and per-clip thresholds then span both videos. Pass 1b flags
+  possible changes (`possible_video_change_t`) but doesn't split clips, because most flags
+  come from fast head movement; check the flagged times against the video.
 - **Pose errors** – a wrist occasionally snaps onto the bench or taskbar; the analysis keeps
   the wrist nearest the previous position, but fast head motion (motion blur) still causes
   noise. Reps with unreliable tracking are marked `tracking_quality = check`.

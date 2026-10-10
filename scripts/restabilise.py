@@ -3,12 +3,19 @@
 Pass 1 chains its stabilisation from frame to frame, so one bad link (motion blur, a
 glance away) corrupts every later frame in the chain. This pass replaces those transforms:
 
-  * clips are found from the pass-1 person detections (same rule as analyse_reps.py)
+  * clips are found from the pass-1 person detections (runs with gaps under 1.5 s)
   * per clip, a sharp reference frame is picked from the middle half
   * every frame is matched directly to the reference (ORB + RANSAC homography); a frame
     that can't be is matched to the nearest registered keyframe instead, so a transform
     is never more than two links from the reference
   * transforms with implausible rotation, shear or scale at the athlete are rejected
+
+Clips can also contain back-to-back videos (the next video starting within 1.5 s). Possible
+changes of on-screen video are detected - frames ~0.25 s apart are aligned and their static
+content compared, and a change is confirmed only if no sharp frame within 2 s before matches
+one within 2 s after - and flagged in the `video_change` column. They are not used to split
+clips: fast head movement and the screen leaving the view produce the same signal, so they are
+for review. seg_id identifies the clips; analyse_reps.py uses them as its clips.
 
 Writes a copy of the pass-1 per-frame data with the stabilisation columns (h00..h22,
 h_inliers, ref_id, seg_id) replaced: OUT_DIR/frames_restab.csv. Feed that to
@@ -25,6 +32,12 @@ FPS_DEFAULT = 25.0
 MIN_CLIP_S, MAX_GAP_S = 8.0, 1.5      # same clip rule as analyse_reps.py
 MIN_INLIERS = 40
 KEYFRAME_EVERY = 12                   # frames between keyframe candidates
+CUT_GAP = 6                           # frames apart when comparing on-screen content (~0.25 s)
+CUT_SIM = 0.5                         # content similarity below this = different content
+SAME_SIM = 0.8                        # ... above this = same video (rejects a candidate change)
+THUMB_SCALE = 4                       # content comparisons run at 1/4 resolution
+CONFIRM_S = 2.0                       # a change is confirmed only if no sharp frame within this
+                                      # many seconds before it matches one within it after
 H_COLS = [f"h{a}{b}" for a in range(3) for b in range(3)]
 
 
@@ -60,6 +73,21 @@ def make_mask(shape, r):
     return m
 
 
+def content_thumb(g, r):
+    """Small grey image of the frame and a mask of the video's static content: the bright
+    projected area minus the player-controls strip at its bottom and minus the athlete."""
+    cm = np.zeros(g.shape, np.uint8)
+    x0, y0, x1, y1 = (int(r[k]) for k in ("scr_x0", "scr_y0", "scr_x1", "scr_y1"))
+    cm[max(0, y0):max(0, y0 + int(0.82 * (y1 - y0))), max(0, x0):max(0, x1)] = 255
+    if np.isfinite(r["p_x0"]):
+        bx = [int(r[k]) for k in ("p_x0", "p_y0", "p_x1", "p_y1")]
+        mx, my = int(0.15 * (bx[2] - bx[0])), int(0.1 * (bx[3] - bx[1]))
+        cm[max(0, bx[1] - my):max(0, bx[3] + my), max(0, bx[0] - mx):max(0, bx[2] + mx)] = 0
+    small = cv2.resize(g, None, fx=1 / THUMB_SCALE, fy=1 / THUMB_SCALE, interpolation=cv2.INTER_AREA)
+    cms = cv2.resize(cm, (small.shape[1], small.shape[0]), interpolation=cv2.INTER_NEAREST)
+    return small, cms
+
+
 def plausible(H, pt):
     """Local Jacobian of H at pt: rotation < 15 deg, shear/anisotropy < 1.25, scale 0.6-1.7."""
     x, y = pt
@@ -78,12 +106,13 @@ def plausible(H, pt):
 
 def process_clip(job):
     video, clip_idx, a, b, rows = job
+    cv2.setRNGSeed(clip_idx)  # RANSAC is randomised: seed it so re-runs give the same result
     orb = cv2.ORB_create(nfeatures=2000, fastThreshold=10)
     bf = cv2.BFMatcher(cv2.NORM_HAMMING)
     rows = rows.set_index("frame")
     cap = cv2.VideoCapture(video)
     cap.set(cv2.CAP_PROP_POS_FRAMES, a)
-    feats = {}
+    feats, thumbs = {}, {}
     for f in range(a, b + 1):
         ok, img = cap.read()
         if not ok:
@@ -98,37 +127,84 @@ def process_clip(job):
         kp, des = orb.detectAndCompute(g, m)
         if des is None or len(kp) < 30:
             continue
+        small, cmask = content_thumb(g, r)
         cx = r["p_x0"] + r["p_x1"] if np.isfinite(r["p_x0"]) else r["scr_x0"] + r["scr_x1"]
         cy = r["p_y0"] + r["p_y1"] if np.isfinite(r["p_y0"]) else r["scr_y0"] + r["scr_y1"]
         sharp = cv2.Laplacian(g[int(max(0, r["scr_y0"])):int(r["scr_y1"]), int(max(0, r["scr_x0"])):int(r["scr_x1"])],
                               cv2.CV_64F).var()
         feats[f] = (np.float32([k.pt for k in kp]), des, (cx / 2, cy / 2), sharp)
+        thumbs[f] = (small, cmask)
     cap.release()
     if not feats:
-        return []
+        return [], []
 
-    def match(fa, fb):
+    def match(fa, fb, min_inliers=MIN_INLIERS, min_good=25):
         pa, da, ctr, _ = feats[fa]
         pb, db, _, _ = feats[fb]
         ms = bf.knnMatch(da, db, k=2)
         good = [m[0] for m in ms if len(m) == 2 and m[0].distance < 0.75 * m[1].distance]
-        if len(good) < 25:
+        if len(good) < min_good:
             return None, 0
         H, inl = cv2.findHomography(pa[[m.queryIdx for m in good]], pb[[m.trainIdx for m in good]],
                                     cv2.RANSAC, 3.0)
         if H is None:
             return None, 0
         n = int(inl.sum())
-        return (H, n) if n >= MIN_INLIERS and plausible(H, ctr) else (None, n)
+        return (H, n) if n >= min_inliers and plausible(H, ctr) else (None, n)
 
+    def content_sim(fa, fb):
+        """Similarity (NCC) of the static on-screen content of two frames, after aligning
+        fa onto fb; NaN when they can't be aligned (e.g. different content on screen)."""
+        H, _ = match(fa, fb, min_inliers=20, min_good=20)
+        if H is None:
+            return np.nan
+        (sa, ma), (sb, mb) = thumbs[fa], thumbs[fb]
+        S = np.diag([1 / THUMB_SCALE, 1 / THUMB_SCALE, 1.0])
+        Hs = S @ H @ np.linalg.inv(S)
+        size = (sb.shape[1], sb.shape[0])
+        wa = cv2.warpPerspective(sa, Hs, size, flags=cv2.INTER_LINEAR)
+        wm = cv2.warpPerspective(ma, Hs, size, flags=cv2.INTER_NEAREST)
+        m = (wm > 0) & (mb > 0)
+        if m.sum() < 200:
+            return np.nan
+        x, y = wa[m].astype(float), sb[m].astype(float)
+        x, y = x - x.mean(), y - y.mean()
+        den = np.sqrt((x * x).sum() * (y * y).sum())
+        return float((x * y).sum() / den) if den > 0 else np.nan
+
+    # --- changes of on-screen video within the clip. Frames CUT_GAP apart are compared; a
+    # change shows as a run of frames whose comparison fails or scores low. It is confirmed
+    # only if no frame shortly before the run matches any frame shortly after it (motion
+    # blur also breaks comparisons briefly, but the content either side is the same).
     fr = sorted(feats)
-    mid = fr[len(fr) // 4: max(len(fr) // 4 + 1, 3 * len(fr) // 4)]
-    ref = max(mid, key=lambda f: len(feats[f][0]) * feats[f][3])  # many features, sharp
-    reg = {ref: (np.eye(3), len(feats[ref][0]), 0)}  # frame -> (H to ref, inliers, keyframe id)
-    keyframes = [ref]
-    # register outward from the reference so neighbouring keyframes are available
-    order = sorted(fr, key=lambda f: abs(f - ref))
-    for f in order:
+    bad = [f for f in fr if f - CUT_GAP in feats and not (content_sim(f, f - CUT_GAP) >= CUT_SIM)]
+    cuts, run = [], []
+    for f in bad + [None]:
+        if f is not None and run and f - run[-1] <= 2:
+            run.append(f)
+            continue
+        if len(run) >= CUT_GAP // 2:
+            s_, e_ = run[0], run[-1]
+            # the sharpest frames up to CONFIRM_S either side (motion blur next to a fast
+            # head movement would otherwise make the same video look different)
+            win = int(round(CONFIRM_S * FPS_DEFAULT))
+            sharpest = lambda xs: sorted(xs, key=lambda x: -feats[x][3])[:4]
+            before = sharpest([x for x in fr if s_ - CUT_GAP - win <= x <= s_ - CUT_GAP])
+            after = sharpest([x for x in fr if e_ + 1 <= x <= e_ + win])
+            same = any(content_sim(x, y) >= SAME_SIM for x in after for y in before)
+            if before and after and not same:
+                cuts.append(max(s_, e_ - CUT_GAP + 1))
+        run = [f] if f is not None else []
+
+    def register(fr):
+      """Register frames fr (one video) to a sharp reference frame from their middle."""
+      mid = fr[len(fr) // 4: max(len(fr) // 4 + 1, 3 * len(fr) // 4)]
+      ref = max(mid, key=lambda f: len(feats[f][0]) * feats[f][3])  # many features, sharp
+      reg = {ref: (np.eye(3), len(feats[ref][0]), 0)}  # frame -> (H to ref, inliers, keyframe id)
+      keyframes = [ref]
+      # register outward from the reference so neighbouring keyframes are available
+      order = sorted(fr, key=lambda f: abs(f - ref))
+      for f in order:
         if f == ref:
             continue
         H, n = match(f, ref)
@@ -150,12 +226,17 @@ def process_clip(job):
         # promote well-registered, sharp frames to keyframes (direct matches only)
         if kf_id == 0 and n >= 120 and all(abs(f - k) >= KEYFRAME_EVERY for k in keyframes):
             keyframes.append(f)
+      return reg
+
+    # --- register the clip. Detected changes are reported, not used to split the clip: on
+    # this kind of footage the same signal (frames that can't be matched) also comes from fast
+    # head movement and the screen leaving the view, so splitting would cut real clips apart.
     out = []
-    for f, (H, n, kf_id) in reg.items():
+    for f, (H, n, kf_id) in register(fr).items():
         rec = {"frame": f, "seg_id": clip_idx, "ref_id": clip_idx * 1000 + kf_id, "h_inliers": n}
         rec.update({c: H.ravel()[i] for i, c in enumerate(H_COLS)})
         out.append(rec)
-    return out
+    return out, [(clip_idx, c) for c in cuts]
 
 
 if __name__ == "__main__":
@@ -181,11 +262,14 @@ if __name__ == "__main__":
     jobs = [(args.video, i, a, b, dfi.loc[a:b, cols].reset_index(drop=True))
             for i, (a, b) in enumerate(clips, start=1)]
     jobs.sort(key=lambda j: -(j[3] - j[2]))  # longest first, for better load balance
-    tic, results = time.time(), []
+    tic, results, all_cuts = time.time(), [], []
     with Pool(args.jobs) as pool:
-        for k, res in enumerate(pool.imap_unordered(process_clip, jobs), start=1):
+        for k, (res, cuts) in enumerate(pool.imap_unordered(process_clip, jobs), start=1):
             results += res
+            all_cuts += cuts
             print(f"  {k}/{len(jobs)} clips done ({time.time() - tic:.0f}s)", flush=True)
+    print(f"{len(all_cuts)} possible video change(s) inside clips (flagged for review, not split)",
+          flush=True)
 
     out = df.set_index("frame", drop=False)
     for c in H_COLS + ["h_inliers", "ref_id", "seg_id"]:
@@ -199,6 +283,10 @@ if __name__ == "__main__":
     # marker checked by analyse_reps.py: pass-1 transforms and segment IDs are chunk-local
     # and must not be analysed directly
     out["stabilisation"] = "restab"
+    # possible changes of on-screen video, per frame (1 = a candidate change starts here)
+    out["video_change"] = 0
+    for _, c in all_cuts:
+        out.loc[c, "video_change"] = 1
     out_path = Path(args.out_dir) / "frames_restab.csv"
     out.to_csv(out_path, index=False)
     in_clips = sum(b - a + 1 for a, b in clips)
