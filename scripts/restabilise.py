@@ -32,8 +32,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
+from videoinfo import open_video
 
-FPS_DEFAULT = 25.0
 MIN_CLIP_S, MAX_GAP_S = 8.0, 1.5      # same clip rule as analyse_reps.py
 MIN_INLIERS = 40
 KEYFRAME_EVERY = 12                   # frames between keyframe candidates
@@ -141,8 +141,11 @@ def process_clip(job):
         feats[f] = (np.float32([k.pt for k in kp]), des, (cx / 2, cy / 2), sharp)
         thumbs[f] = (small, cmask)
     cap.release()
+    # every frame of the detected clip belongs to it, registered or not; frames that can't be
+    # registered keep an empty transform (analyse_reps.py treats them as tracking gaps)
+    clip_frames = [{"frame": int(f), "seg_id": clip_idx} for f in rows.index]
     if not feats:
-        return [], []
+        return clip_frames, []
 
     def match(fa, fb, min_inliers=MIN_INLIERS, min_good=25):
         pa, da, ctr, _ = feats[fa]
@@ -240,8 +243,9 @@ def process_clip(job):
     # --- register the clip. Detected changes are reported, not used to split the clip: on
     # this kind of footage the same signal (frames that can't be matched) also comes from fast
     # head movement and the screen leaving the view, so splitting would cut real clips apart.
-    out = []
-    for f, (H, n, kf_id) in register(fr).items():
+    reg = register(fr)
+    out = [r for r in clip_frames if r["frame"] not in reg]
+    for f, (H, n, kf_id) in reg.items():
         rec = {"frame": f, "seg_id": clip_idx, "ref_id": clip_idx * 1000 + kf_id, "h_inliers": n}
         rec.update({c: H.ravel()[i] for i, c in enumerate(H_COLS)})
         out.append(rec)
@@ -270,8 +274,7 @@ if __name__ == "__main__":
     if not files:
         raise SystemExit(f"no frames_*.csv in {args.pass1_dir}")
     df = pd.concat([pd.read_csv(f) for f in files]).sort_values("frame").drop_duplicates("frame")
-    cap = cv2.VideoCapture(args.video)
-    fps = cap.get(cv2.CAP_PROP_FPS) or FPS_DEFAULT
+    cap, fps, _ = open_video(args.video)
     cap.release()
     clips = find_clips(df, fps)
     print(f"{len(clips)} clips, {sum(b - a + 1 for a, b in clips)} frames, {args.jobs} jobs", flush=True)
@@ -309,6 +312,7 @@ if __name__ == "__main__":
     out_path = Path(args.out_dir) / "frames_restab.csv"
     out.to_csv(out_path, index=False)
     in_clips = sum(b - a + 1 for a, b in clips)
-    pct = 100 * len(results) / max(1, in_clips)
-    print(f"registered {len(results)} of {in_clips} clip frames ({pct:.1f}%) "
+    n_reg = sum("h00" in r for r in results)
+    pct = 100 * n_reg / max(1, in_clips)
+    print(f"registered {n_reg} of {in_clips} clip frames ({pct:.1f}%) "
           f"-> {out_path} in {time.time() - tic:.0f}s")

@@ -9,14 +9,17 @@ import time
 import cv2
 from device import describe, pick_device
 from ultralytics import YOLO
+from videoinfo import check_time, open_video
 
 video, t0, t1, model_name, out = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), sys.argv[4], sys.argv[5]
 device = pick_device(sys.argv[6] if len(sys.argv) > 6 else "auto")
 print("device:", describe(device))
+cap, fps, n_frames = open_video(video)
+check_time(t0, n_frames / fps, "T0")
+if t1 <= t0:
+    raise SystemExit("T1 must be after T0")
 model = YOLO(model_name)
-cap = cv2.VideoCapture(video)
 cap.set(cv2.CAP_PROP_POS_MSEC, t0 * 1000)
-fps = cap.get(cv2.CAP_PROP_FPS)
 n, tic, saved = 0, time.time(), 0
 while cap.get(cv2.CAP_PROP_POS_MSEC) < t1 * 1000:
     ok, f = cap.read()
@@ -30,4 +33,6 @@ while cap.get(cv2.CAP_PROP_POS_MSEC) < t1 * 1000:
         dets = [(round(float(c), 2), [int(v) for v in xy]) for c, xy in zip(b.conf, b.xyxy, strict=True)]
         print(f"frame {n}: {len(b)} persons", dets)
 dt = time.time() - tic
+if n == 0:
+    raise SystemExit("no frames could be read in that time window")
 print(f"{n} frames in {dt:.1f}s = {n/dt:.1f} fps")

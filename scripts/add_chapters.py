@@ -18,8 +18,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-import cv2
 import pandas as pd
+from videoinfo import open_video
 
 
 def chapters(analysis_dir, offset, duration, fps=25.0):
@@ -70,9 +70,8 @@ def write_with_chapters(video, analysis_dir, out, offset=0.0):
         raise SystemExit("ffmpeg not found on the PATH")
     if Path(video).resolve() == Path(out).resolve():
         raise SystemExit("OUT must be a different file from VIDEO")
-    cap = cv2.VideoCapture(str(video))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
+    cap, fps, n_frames = open_video(video)
+    duration = n_frames / fps
     cap.release()
     chs = chapters(analysis_dir, offset, duration, fps)
     meta = [";FFMETADATA1",

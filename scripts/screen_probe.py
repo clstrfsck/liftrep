@@ -4,11 +4,13 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from videoinfo import open_video
 
 video, out_dir = sys.argv[1], Path(sys.argv[2])
 times = [float(t) for t in sys.argv[3:]]
 out_dir.mkdir(parents=True, exist_ok=True)
-cap = cv2.VideoCapture(video)
+cap, fps, n_frames = open_video(video)
+duration = n_frames / fps
 
 def find_screen(frame):
     g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -27,8 +29,14 @@ def find_screen(frame):
     return None, thr, m
 
 for t in times:
+    if not 0 <= t <= duration:
+        print(f"{t}: outside the video (0-{duration:.1f} s), skipped")
+        continue
     cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
     ok, f = cap.read()
+    if not ok:
+        print(f"{t}: frame could not be read, skipped")
+        continue
     q, thr, m = find_screen(f)
     vis = f.copy()
     if q is not None:

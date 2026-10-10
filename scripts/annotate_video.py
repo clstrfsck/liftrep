@@ -32,6 +32,7 @@ import cv2
 import numpy as np
 import pandas as pd
 from add_chapters import write_with_chapters
+from videoinfo import check_time, open_video
 
 ap = argparse.ArgumentParser()
 ap.add_argument("video")
@@ -55,14 +56,17 @@ fa = pd.read_csv(adir / "frames_annotation.csv.gz").set_index("frame")
 clips = pd.read_csv(adir / "clips.csv").set_index("clip")
 H_COLS = [f"h{a}{b}" for a in range(3) for b in range(3)]
 
-cap = cv2.VideoCapture(args.video)
-fps = cap.get(cv2.CAP_PROP_FPS)
+cap, fps, n_frames = open_video(args.video)
 W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 start, end = args.start, args.end if args.end is not None else n_frames / fps
 if args.clip is not None:
+    if args.clip not in clips.index:
+        raise SystemExit(f"--clip {args.clip}: no such clip in {adir / 'clips.csv'}")
     c = clips.loc[args.clip]
     start, end = max(0.0, c["start_t"] - 1), c["end_t"] + 1
+check_time(start, n_frames / fps, "start")
+if end <= start:
+    raise SystemExit("the end time must be after the start time")
 f0, f1 = round(start * fps), min(n_frames - 1, round(end * fps))
 
 # ------------------------------------------------------------- per-frame phase timers

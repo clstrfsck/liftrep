@@ -4,6 +4,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from videoinfo import open_video
 
 video, out_dir = sys.argv[1], Path(sys.argv[2])
 step = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
@@ -12,8 +13,8 @@ if step <= 0:
 cols, rows, tw = 8, 8, 240
 out_dir.mkdir(parents=True, exist_ok=True)
 
-cap = cv2.VideoCapture(video)
-dur = cap.get(cv2.CAP_PROP_FRAME_COUNT) / cap.get(cv2.CAP_PROP_FPS)
+cap, fps, n_frames = open_video(video)
+dur = n_frames / fps
 thumbs, t = [], 0.0
 while t < dur:
     cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)

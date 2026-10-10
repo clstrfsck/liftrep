@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 from device import describe, pick_device
 from ultralytics import YOLO
+from videoinfo import check_time, open_video
 
 KP_NAMES = ["nose", "l_eye", "r_eye", "l_ear", "r_ear", "l_sho", "r_sho", "l_elb", "r_elb",
             "l_wri", "r_wri", "l_hip", "r_hip", "l_knee", "r_knee", "l_ank", "r_ank"]
@@ -42,8 +43,10 @@ model = YOLO(args.model)
 orb = cv2.ORB_create(nfeatures=1500, fastThreshold=10)
 bf = cv2.BFMatcher(cv2.NORM_HAMMING)
 
-cap = cv2.VideoCapture(args.video)
-fps = cap.get(cv2.CAP_PROP_FPS)
+cap, fps, n_frames = open_video(args.video)
+check_time(args.start, n_frames / fps, "--start")
+if args.end <= args.start:
+    raise SystemExit("--end must be after --start")
 start_frame = round(args.start * fps)
 cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 

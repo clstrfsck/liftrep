@@ -36,3 +36,6 @@ ignore = [
     "RUF005",   # false positives here: `array + [...]` is NumPy element-wise addition, not concatenation
     "S603",     # subprocess calls run this project's own scripts and ffmpeg with fixed arguments
 ]
+
+[lint.per-file-ignores]
+"tests/*" = ["S101"]  # pytest checks results with plain assert statements

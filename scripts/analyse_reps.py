@@ -25,8 +25,8 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import pandas as pd
-from scipy.ndimage import median_filter
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import find_peaks
+from signal_utils import bridge_short_gaps, n_changes, runs_of, smooth_segments
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -57,6 +57,8 @@ MAX_SPEED_RATIO = 3.0     # a rep moving > 3x faster than the clip's typical rep
 
 out_dir = Path(sys.argv[1])
 (out_dir / "plots").mkdir(parents=True, exist_ok=True)
+for old_plot in (out_dir / "plots").glob("clip_*.png"):  # plots from an earlier run
+    old_plot.unlink()
 # inputs may be files, folders (all frames_*.csv inside) or wildcard patterns; the patterns
 # are expanded here because Windows shells don't expand them
 inputs = []
@@ -110,8 +112,8 @@ EVENT_COLS = ["clip", "rep", "event", "t", "frame", "rec_us", "stab_x", "stab_y"
 CLIP_COLS = ["clip", "block", "start_t", "end_t", "start_frame", "end_frame", "duration_s", "lift",
              "tracked", "n_reps", "n_partial", "n_indeterminate", "n_spikes_removed", "n_reps_tracking_good",
              "mean_rep_s", "robust_range_stab_px", "valid_kp_frac", "hip_below_shoulder",
-             "box_aspect", "stab_valid_frac", "glitch_frames_masked", "possible_video_change_t",
-             "skipped"]
+             "box_aspect", "stab_valid_frac", "glitch_frames_masked", "unbridged_gap_s",
+             "possible_video_change_t", "skipped"]
 FRAME_COLS = ["frame", "t", "clip", "rep", "n_reps", "phase", "bar_stab_x", "bar_stab_y",
               "bar_scene_x", "bar_scene_y", "person_w"] + H_COLS
 
@@ -171,51 +173,6 @@ def rebase(d):
     Hb[~good] = np.nan
     d[H_COLS] = Hb.reshape(-1, 9)
     return d, float(np.mean(good))
-
-
-def bridge_short_gaps(s, max_len):
-    """Linearly fill interior gaps of at most max_len samples; leave longer gaps entirely
-    unfilled (pandas' interpolate(limit=...) would fill the first max_len of every gap)."""
-    filled = s.interpolate(limit_area="inside")
-    gap = s.isna()
-    run_id = (gap != gap.shift()).cumsum()
-    run_len = gap.groupby(run_id).transform("sum")
-    return s.where(~gap | (run_len > max_len), filled)
-
-
-def n_changes(ids):
-    """Number of changes between consecutive known values (missing values are skipped)."""
-    v = np.asarray(ids, dtype=float)
-    v = v[~np.isnan(v)]
-    return int(np.count_nonzero(np.diff(v))) if len(v) > 1 else 0
-
-
-def runs_of(mask):
-    """(start, end) index pairs of contiguous True runs in a boolean array."""
-    m = np.r_[False, mask, False].astype(int)
-    starts, ends = np.flatnonzero(np.diff(m) == 1), np.flatnonzero(np.diff(m) == -1) - 1
-    return list(zip(starts, ends, strict=True))
-
-
-def smooth_segments(y, ok):
-    """Despike, smooth and differentiate each contiguous stretch of data separately, so no
-    filter window or velocity spans an unbridged gap. Returns (smoothed y, velocity px/s)."""
-    yy, vy = np.full(len(y), np.nan), np.full(len(y), np.nan)
-    for a, b in runs_of(ok):
-        seg = y[a:b + 1]
-        n = len(seg)
-        if n == 1:
-            yy[a], vy[a] = seg[0], 0.0
-            continue
-        med = median_filter(seg, size=min(7, n), mode="nearest")
-        w = min(9, n if n % 2 else n - 1)
-        if w >= 3:
-            yy[a:b + 1] = savgol_filter(med, w, 2)
-            vy[a:b + 1] = savgol_filter(seg, w, 2, deriv=1) * FPS
-        else:
-            yy[a:b + 1] = med
-            vy[a:b + 1] = np.gradient(seg) * FPS
-    return yy, vy
 
 
 def kp_mean(d, names):
@@ -333,7 +290,7 @@ def analyse_clip(ci, r):
                           "stab_valid_frac": round(stab_valid, 3),
                           "skipped": "too few frames with a tracked bar proxy"})
         return
-    yy, vy = smooth_segments(y.values, ok)  # vy: px/s, +ve = moving down
+    yy, vy = smooth_segments(y.values, ok, FPS)  # vy: px/s, +ve = moving down
     # unbridged gaps (interior frames with no data) - rep detection still runs across them on
     # the interpolated trace below, but reps whose movement spans one are flagged
     gap = ~ok
@@ -572,6 +529,9 @@ def analyse_clip(ci, r):
         "robust_range_stab_px": round(float(robust), 1), "valid_kp_frac": round(float(valid_frac), 3),
         "hip_below_shoulder": round(hip_below_sho, 3), "box_aspect": round(aspect, 2),
         "stab_valid_frac": round(stab_valid, 3), "glitch_frames_masked": n_glitch,
+        # total unbridged tracking gap time: reps can hide in it, so n_reps is a lower bound
+        "unbridged_gap_s": round(float(sum(b_ - a_ + 1 for a_, b_ in runs_of(gap)
+                                           if a_ > 0 and b_ < len(gap) - 1)) / FPS, 2),
         # times of possible changes of on-screen video inside this clip (for review)
         "possible_video_change_t": " ".join(f"{v:.1f}" for v in d.t[d.get("video_change", 0) == 1])
                                    if "video_change" in d else "",

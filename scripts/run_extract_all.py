@@ -10,14 +10,15 @@ usage: run_extract_all.py VIDEO [--out-dir work] [--jobs N] [--device auto|cuda|
 """
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import time
 from contextlib import ExitStack
 from pathlib import Path
 
-import cv2
 from device import describe, pick_device
+from videoinfo import open_video
 
 ap = argparse.ArgumentParser()
 ap.add_argument("video")
@@ -27,7 +28,8 @@ ap.add_argument("--jobs", type=int, default=0,
 ap.add_argument("--device", default="auto")
 ap.add_argument("--model", default="models/yolo11x-pose.pt")
 ap.add_argument("--overwrite", action="store_true",
-                help="delete pass-1 chunk files and logs left in --out-dir by an earlier run")
+                help="delete pass-1 chunk files, logs and the restab/ folder left in --out-dir "
+                     "by an earlier run")
 ap.add_argument("--no-restabilise", action="store_true",
                 help="skip pass 1b (re-stabilisation); it must then be run before analyse_reps.py")
 args = ap.parse_args()
@@ -41,10 +43,8 @@ print(f"device: {describe(device)}")
 if device == "cpu":
     print("note: CPU inference is slow; consider --model models/yolo11m-pose.pt or yolo11s-pose.pt")
 
-cap = cv2.VideoCapture(args.video)
-if not cap.isOpened():
-    raise SystemExit(f"cannot open video: {args.video}")
-duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / cap.get(cv2.CAP_PROP_FPS)
+cap, fps, n_frames = open_video(args.video)
+duration = n_frames / fps
 cap.release()
 
 # every chunk at least MIN_CHUNK_S long, so chunk start times (and file names) stay distinct
@@ -59,14 +59,19 @@ out_dir = Path(args.out_dir)
 out_dir.mkdir(parents=True, exist_ok=True)
 # files from an earlier run (possibly split differently) would otherwise be read by pass 1b
 stale = sorted(out_dir.glob("frames_*.csv")) + sorted(out_dir.glob("log_*.txt"))
+if (out_dir / "restab").exists():
+    stale.append(out_dir / "restab")  # pass-1b output of the earlier run
 if stale:
     if not args.overwrite:
         raise SystemExit(f"{out_dir} already holds pass-1 files from an earlier run "
                          f"({', '.join(p.name for p in stale[:4])}{', ...' if len(stale) > 4 else ''}). "
                          "Use another --out-dir, or --overwrite to delete them.")
     for p in stale:
-        p.unlink()
-    print(f"deleted {len(stale)} file(s) from an earlier run")
+        if p.is_dir():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+    print(f"deleted {len(stale)} item(s) from an earlier run")
 extractor = Path(__file__).with_name("extract_frames.py")
 env = dict(os.environ)
 if device == "cpu":  # share the cores between processes instead of oversubscribing

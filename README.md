@@ -32,7 +32,8 @@ rep features are derived from the bar's vertical motion.
 1b. **Pass 1b – re-stabilisation** (`scripts/restabilise.py`, CPU, ≈ 5–10 min; **required**,
    and run automatically after pass 1)
    - Finds the lift clips from the pass-1 person detections (runs with gaps under 1.5 s).
-     These are the clips used by every later step.
+     These are the clips used by every later step; every frame of a clip carries its clip ID,
+     including frames that can't be registered (they keep an empty transform).
    - Per clip, picks a sharp reference frame from the middle and matches every frame
      **directly** to it. A frame that can't be matched directly is matched to the nearest
      registered keyframe, so a transform is never more than two links from the reference.
@@ -143,7 +144,7 @@ The run's chunk files are listed in `work/chunks.txt`, which pass 1b reads. Opti
 | `--jobs` | 4 on a GPU; about one per 4 CPU cores on CPU | Number of parallel processes |
 | `--device` | `auto` | See [Choosing a device](#choosing-a-device) |
 | `--model` | `models/yolo11x-pose.pt` | Pose model |
-| `--overwrite` | off | Delete pass-1 files left in `--out-dir` by an earlier run (otherwise the run stops, so old chunks can't be mixed in) |
+| `--overwrite` | off | Delete pass-1 chunk files, logs and the `restab/` folder left in `--out-dir` by an earlier run (otherwise the run stops, so old results can't be mixed in) |
 | `--no-restabilise` | off | Skip pass 1b; run `restabilise.py` yourself before pass 2 |
 
 Several processes help even on one GPU, because video decoding and feature matching run on
@@ -182,7 +183,8 @@ The first argument is the output directory. The rest are the per-frame CSVs from
 given as files, a folder (all `frames_*.csv` in it) or a wildcard pattern (expanded by the
 script, so it also works in Windows shells). Raw pass-1 CSVs are refused, with a message
 to run `restabilise.py` first. Pass 2 runs on the CPU and can be re-run freely after
-changing thresholds without repeating pass 1 or 1b. Every output file is always written with
+changing thresholds without repeating pass 1 or 1b; QA plots from an earlier run are removed
+first. Every output file is always written with
 its full set of columns, even when a video contains no lift clips.
 
 ### Pass 3 – annotated video (optional, ≈ 5 min for the whole video)
@@ -277,6 +279,7 @@ Use `--offset S` there if the video was rendered from a time range starting at `
 | `valid_kp_frac` | Fraction of frames with a confident bar-proxy keypoint |
 | `stab_valid_frac` | Fraction of frames with a valid stabilising transform |
 | `glitch_frames_masked` | Frames masked as stabilisation glitches before rep detection |
+| `unbridged_gap_s` | Total time (s) of unbridged tracking gaps in the clip. A rep can hide completely in a gap, so where this is large `n_reps` may undercount |
 | `hip_below_shoulder`, `box_aspect` | Lift classification features (squat if `hip_below_shoulder` > 0.2) |
 | `possible_video_change_t` | Times (s) of possible changes of on-screen video inside the clip, flagged by pass 1b for review (empty if none) |
 | `skipped` | Reason, if the clip could not be analysed: too few frames with a tracked bar proxy, or mostly unregistered (otherwise empty) |
@@ -420,11 +423,35 @@ onset and stop times, top and bottom levels, and range against the minimum range
 | `scripts/annotate_video.py` | Pass 3: annotated video (see above) |
 | `scripts/add_chapters.py VIDEO ANALYSIS_DIR OUT.mp4 [--offset S]` | Add clip / lift / rep chapters to a video without re-encoding |
 | `scripts/device.py` | Shared helper: picks the compute device (not run directly) |
+| `scripts/videoinfo.py` | Shared helper: opens a video and checks its frame rate, frame count and requested times (not run directly) |
+| `scripts/signal_utils.py` | Shared helper: gap bridging, continuous runs and per-run smoothing for the analysis (not run directly) |
 
 ## Development
 
-The scripts are linted with [ruff](https://docs.astral.sh/ruff/); the rule set is pinned in
-`ruff.toml`. Run `ruff check scripts` before committing.
+Install the development tools (pytest and ruff) into the environment:
+
+```bash
+uv pip install --python .venv -r requirements-dev.txt
+```
+
+**Tests** – `tests/` holds a pytest suite that needs no real recording or GPU:
+
+- unit tests of the signal helpers (gap bridging, continuous runs, per-run smoothing);
+- end-to-end runs of `analyse_reps.py` on synthetic sessions with known answers (rep counts,
+  phase timings, bench press / squat classification, set-up, short and long tracking gaps,
+  indeterminate reps, clips with unregistered edges, empty sessions);
+- input checks and safety guards of the command-line scripts (refusing raw pass-1 data,
+  never overwriting the source video, stale files, invalid `--jobs`, unreadable videos).
+
+```bash
+.venv/bin/python -m pytest tests
+```
+
+Pass 1 (pose estimation) and pass 1b (registration) are not covered by the tests, as they
+need real footage.
+
+**Linting** – the scripts and tests are linted with [ruff](https://docs.astral.sh/ruff/); the
+rule set is pinned in `ruff.toml`. Run `ruff check scripts tests` before committing.
 
 ## Licence
 
