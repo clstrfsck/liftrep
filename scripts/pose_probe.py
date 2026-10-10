@@ -1,4 +1,5 @@
-"""Probe: run YOLO pose on a time window and report speed + detections inside the bright screen region.
+"""Probe: run YOLO pose on whole frames in a time window and report speed and all detections
+(unfiltered: people in the room are included; extract_frames.py keeps only the athlete on screen).
 
 usage: pose_probe.py VIDEO T0 T1 MODEL OUT_PREFIX [DEVICE]   (DEVICE defaults to auto)
 """

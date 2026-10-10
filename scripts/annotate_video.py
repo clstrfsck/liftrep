@@ -121,7 +121,8 @@ def _inv(row):
     return (mi / mi[2, 2]).ravel()
 
 
-fa[HINV_COLS] = np.apply_along_axis(_inv, 1, fa[H_COLS].values.astype(float))
+fa[HINV_COLS] = (np.apply_along_axis(_inv, 1, fa[H_COLS].values.astype(float)) if len(fa)
+                 else np.empty((0, 9)))  # empty session: nothing to draw
 win = int(round(args.geom_smooth * fps)) | 1
 for clip_id, idx in fa.groupby("clip").groups.items():
     g = fa.loc[idx, HINV_COLS]
@@ -283,10 +284,18 @@ if ffmpeg:
            "-map", "0:v", "-map", "1:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
            "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", args.out]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
-    write = proc.stdin.write
+
+    def write(buf):
+        try:
+            proc.stdin.write(buf)
+        except BrokenPipeError:
+            proc.wait()
+            raise SystemExit(f"ffmpeg stopped unexpectedly (exit code {proc.returncode})")
 else:
     print("ffmpeg not found: writing mp4v without audio")
     vw = cv2.VideoWriter(args.out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
+    if not vw.isOpened():
+        raise SystemExit(f"could not open {args.out} for writing")
     write = None
 
 geo = {f: g for f in range(f0, f1 + 1) if (g := geometry(f)) is not None}
@@ -294,9 +303,11 @@ labels = smooth_labels(geo)
 
 cap.set(cv2.CAP_PROP_POS_FRAMES, f0)
 tic = time.time()
+read_fail = None
 for f in range(f0, f1 + 1):
     ok, img = cap.read()
     if not ok:
+        read_fail = f
         break
     if f in fa.index:
         draw(img, f, geo.get(f), labels.get(f))
@@ -309,9 +320,16 @@ for f in range(f0, f1 + 1):
 
 if ffmpeg:
     proc.stdin.close()
-    proc.wait()
+    if proc.wait() != 0:
+        raise SystemExit(f"ffmpeg failed (exit code {proc.returncode}); {args.out} is incomplete")
 else:
     vw.release()
+if read_fail is not None:
+    # The container's frame count can exceed the decodable frames (e.g. a video cut without
+    # re-encoding), and a damaged file looks the same, so warn rather than fail.
+    print(f"WARNING: the video could only be read up to frame {read_fail - 1}, not frame {f1} as "
+          f"its header states; the output stops there", flush=True)
+    f1 = read_fail - 1
 if ffmpeg and not args.no_chapters:
     chs = write_with_chapters(args.out, adir, final_out, offset=f0 / fps)
     Path(args.out).unlink()

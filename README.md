@@ -19,8 +19,9 @@ rep features are derived from the bar's vertical motion.
 
 1. **Pass 1 – per-frame extraction** (`scripts/extract_frames.py`, slow, GPU)
    - Finds the bright projected clip on the screen in each scene-video frame.
-   - Runs YOLO pose (`yolo11x-pose`) on a crop around it and keeps the best person
-     *inside* the screen (people in the room are ignored).
+   - Runs YOLO pose (`yolo11x-pose`) on a crop around it and keeps the best person whose
+     centre is on the screen (inside the convex outline of the bright region); people in the
+     room outside the screen are ignored.
    - Matches ORB features on the screen plane (athlete masked out) to a reference frame,
      giving a homography that cancels the observer's head movement ("stabilised" coordinates).
    - Writes one CSV row per frame.
@@ -96,9 +97,9 @@ The Python interpreter in the environment is `.venv/bin/python` on macOS and Lin
 `.venv\Scripts\python` on Windows. Commands below use the macOS/Linux form; on Windows
 substitute the path (forward slashes in the script arguments work on Windows too).
 
-The pose model `models/yolo11x-pose.pt` is already downloaded. If it is missing,
-Ultralytics downloads it automatically the first time it is used; place it in `models/`
-(or pass `--model` with its path).
+The pose model (`models/yolo11x-pose.pt` by default) isn't included in the repository.
+Ultralytics downloads it automatically the first time it is used; to keep it in `models/`,
+download it there or pass `--model` with its path.
 
 ### Choosing a device
 
@@ -132,7 +133,8 @@ Whole video, split into parallel chunks (outputs `work/frames_<start>.csv`, logs
 .venv/bin/python scripts/run_extract_all.py "<video>.mp4"
 ```
 
-The video's length is read automatically and split into equal chunks. Options:
+The video's length is read automatically and split into equal chunks of at least 10 s.
+The run's chunk files are listed in `work/chunks.txt`, which pass 1b reads. Options:
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -140,6 +142,7 @@ The video's length is read automatically and split into equal chunks. Options:
 | `--jobs` | 4 on a GPU; about one per 4 CPU cores on CPU | Number of parallel processes |
 | `--device` | `auto` | See [Choosing a device](#choosing-a-device) |
 | `--model` | `models/yolo11x-pose.pt` | Pose model |
+| `--overwrite` | off | Delete pass-1 files left in `--out-dir` by an earlier run (otherwise the run stops, so old chunks can't be mixed in) |
 | `--no-restabilise` | off | Skip pass 1b; run `restabilise.py` yourself before pass 2 |
 
 Several processes help even on one GPU, because video decoding and feature matching run on
@@ -178,7 +181,8 @@ The first argument is the output directory. The rest are the per-frame CSVs from
 given as files, a folder (all `frames_*.csv` in it) or a wildcard pattern (expanded by the
 script, so it also works in Windows shells). Raw pass-1 CSVs are refused, with a message
 to run `restabilise.py` first. Pass 2 runs on the CPU and can be re-run freely after
-changing thresholds without repeating pass 1 or 1b.
+changing thresholds without repeating pass 1 or 1b. Every output file is always written with
+its full set of columns, even when a video contains no lift clips.
 
 ### Pass 3 – annotated video (optional, ≈ 5 min for the whole video)
 

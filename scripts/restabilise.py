@@ -105,7 +105,7 @@ def plausible(H, pt):
 
 
 def process_clip(job):
-    video, clip_idx, a, b, rows = job
+    video, clip_idx, a, b, rows, fps = job
     cv2.setRNGSeed(clip_idx)  # RANSAC is randomised: seed it so re-runs give the same result
     orb = cv2.ORB_create(nfeatures=2000, fastThreshold=10)
     bf = cv2.BFMatcher(cv2.NORM_HAMMING)
@@ -187,7 +187,7 @@ def process_clip(job):
             s_, e_ = run[0], run[-1]
             # the sharpest frames up to CONFIRM_S either side (motion blur next to a fast
             # head movement would otherwise make the same video look different)
-            win = int(round(CONFIRM_S * FPS_DEFAULT))
+            win = int(round(CONFIRM_S * fps))
             sharpest = lambda xs: sorted(xs, key=lambda x: -feats[x][3])[:4]
             before = sharpest([x for x in fr if s_ - CUT_GAP - win <= x <= s_ - CUT_GAP])
             after = sharpest([x for x in fr if e_ + 1 <= x <= e_ + win])
@@ -246,8 +246,18 @@ if __name__ == "__main__":
     ap.add_argument("out_dir")
     ap.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 4) - 2)))
     args = ap.parse_args()
+    if args.jobs < 1:
+        raise SystemExit("--jobs must be at least 1")
 
-    files = sorted(Path(args.pass1_dir).glob("frames_*.csv"))
+    # 3: read only the chunks of the latest run_extract_all.py run when it left a list of them
+    manifest = Path(args.pass1_dir) / "chunks.txt"
+    if manifest.exists():
+        files = [Path(args.pass1_dir) / n for n in manifest.read_text().split()]
+        missing = [str(f) for f in files if not f.exists()]
+        if missing:
+            raise SystemExit(f"chunk files listed in {manifest} are missing: {missing}")
+    else:
+        files = sorted(Path(args.pass1_dir).glob("frames_*.csv"))
     if not files:
         raise SystemExit(f"no frames_*.csv in {args.pass1_dir}")
     df = pd.concat([pd.read_csv(f) for f in files]).sort_values("frame").drop_duplicates("frame")
@@ -259,7 +269,7 @@ if __name__ == "__main__":
 
     cols = ["frame", "scr_x0", "scr_y0", "scr_x1", "scr_y1", "p_x0", "p_y0", "p_x1", "p_y1"]
     dfi = df.set_index("frame", drop=False)
-    jobs = [(args.video, i, a, b, dfi.loc[a:b, cols].reset_index(drop=True))
+    jobs = [(args.video, i, a, b, dfi.loc[a:b, cols].reset_index(drop=True), fps)
             for i, (a, b) in enumerate(clips, start=1)]
     jobs.sort(key=lambda j: -(j[3] - j[2]))  # longest first, for better load balance
     tic, results, all_cuts = time.time(), [], []

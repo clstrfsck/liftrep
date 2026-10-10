@@ -6,7 +6,7 @@ Then runs restabilise.py (pass 1b) into work/restab/, which analyse_reps.py requ
 pass-1 chunk numbers its segments and chains its transforms independently.
 
 usage: run_extract_all.py VIDEO [--out-dir work] [--jobs N] [--device auto|cuda|mps|cpu]
-                          [--model models/yolo11x-pose.pt] [--no-restabilise]
+                          [--model models/yolo11x-pose.pt] [--overwrite] [--no-restabilise]
 """
 import argparse, os, subprocess, sys, time
 from pathlib import Path
@@ -20,14 +20,18 @@ ap.add_argument("--jobs", type=int, default=0,
                 help="parallel processes (default: 4 on a GPU, about one per 4 CPU cores on CPU)")
 ap.add_argument("--device", default="auto")
 ap.add_argument("--model", default="models/yolo11x-pose.pt")
+ap.add_argument("--overwrite", action="store_true",
+                help="delete pass-1 chunk files and logs left in --out-dir by an earlier run")
 ap.add_argument("--no-restabilise", action="store_true",
                 help="skip pass 1b (re-stabilisation); it must then be run before analyse_reps.py")
 args = ap.parse_args()
 
+if args.jobs < 0:
+    raise SystemExit("--jobs must be at least 1 (or 0 for the default)")
 device = pick_device(args.device)
 cores = os.cpu_count() or 4
 jobs = args.jobs or (4 if device != "cpu" else max(1, cores // 4))
-print(f"device: {describe(device)}, {jobs} parallel jobs")
+print(f"device: {describe(device)}")
 if device == "cpu":
     print("note: CPU inference is slow; consider --model models/yolo11m-pose.pt or yolo11s-pose.pt")
 
@@ -37,8 +41,26 @@ if not cap.isOpened():
 duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / cap.get(cv2.CAP_PROP_FPS)
 cap.release()
 
+# every chunk at least MIN_CHUNK_S long, so chunk start times (and file names) stay distinct
+MIN_CHUNK_S = 10
+capped = max(1, min(jobs, int(duration // MIN_CHUNK_S)))
+if capped < jobs:
+    print(f"using {capped} job(s): each chunk must be at least {MIN_CHUNK_S} s")
+jobs = capped
+print(f"{jobs} parallel job(s)")
+
 out_dir = Path(args.out_dir)
 out_dir.mkdir(parents=True, exist_ok=True)
+# files from an earlier run (possibly split differently) would otherwise be read by pass 1b
+stale = sorted(out_dir.glob("frames_*.csv")) + sorted(out_dir.glob("log_*.txt"))
+if stale:
+    if not args.overwrite:
+        raise SystemExit(f"{out_dir} already holds pass-1 files from an earlier run "
+                         f"({', '.join(p.name for p in stale[:4])}{', ...' if len(stale) > 4 else ''}). "
+                         "Use another --out-dir, or --overwrite to delete them.")
+    for p in stale:
+        p.unlink()
+    print(f"deleted {len(stale)} file(s) from an earlier run")
 extractor = Path(__file__).with_name("extract_frames.py")
 env = dict(os.environ)
 if device == "cpu":  # share the cores between processes instead of oversubscribing
@@ -54,6 +76,9 @@ for i in range(jobs):
            "--start", str(start), "--end", str(end), "--device", device, "--model", args.model]
     procs.append((start, end, log, subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)))
     print(f"  chunk {start:>5}-{end:<5}s -> {out_dir / f'frames_{start}.csv'}")
+
+# list of this run's chunks, read by restabilise.py
+(out_dir / "chunks.txt").write_text("\n".join(f"frames_{s}.csv" for s, _, _, _ in procs) + "\n")
 
 tic = time.time()
 failed = 0

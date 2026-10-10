@@ -6,7 +6,7 @@ For every frame:
   * estimate a homography from this frame to a per-segment reference frame using
     ORB features on the screen plane (lifter masked out), which cancels head motion
 
-Writes one row per frame to a parquet/CSV for the analysis pass.
+Writes one row per frame to a CSV file for the later passes.
 
 usage: extract_frames.py VIDEO OUT.csv [--start S] [--end S] [--model yolo11x-pose.pt]
                          [--device auto|cuda|cuda:N|mps|cpu]
@@ -45,7 +45,7 @@ cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
 
 def screen_region(gray):
-    """Bounding box (x0,y0,x1,y1) and mask of the largest bright component, or None."""
+    """Bounding box (x0,y0,x1,y1) and convex-hull mask of the largest bright component, or None."""
     g = cv2.GaussianBlur(gray, (5, 5), 0)
     thr, m = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     if thr < 60:  # nothing meaningfully bright (looking at floor/ceiling)
@@ -58,7 +58,14 @@ def screen_region(gray):
     x, y, w, h, area = stats[i]
     if area < 0.02 * gray.size:
         return None, None
-    return (int(x), int(y), int(x + w), int(y + h)), (lab == i)
+    # the screen is convex: use the region's convex hull, so dark parts of the picture (the
+    # athlete's clothing, plates, a dark floor) count as on-screen even though they aren't bright,
+    # while people in the darker room outside the screen don't
+    region = (lab == i).astype(np.uint8)
+    pts = cv2.findNonZero(region)
+    hull = np.zeros_like(region)
+    cv2.fillConvexPoly(hull, cv2.convexHull(pts), 1)
+    return (int(x), int(y), int(x + w), int(y + h)), hull.astype(bool)
 
 
 def match_h(kp, des, kp_ref, des_ref):
@@ -105,8 +112,7 @@ while True:
             for j in range(len(r.boxes)):
                 bx = r.boxes.xyxy[j].cpu().numpy() + [cx0, cy0, cx0, cy0]
                 mx, my = int((bx[0] + bx[2]) / 2), int((bx[1] + bx[3]) / 2)
-                inside = 0 <= my < mask.shape[0] and 0 <= mx < mask.shape[1] and \
-                    x0 <= mx <= x1 and y0 <= my <= y1
+                inside = 0 <= my < mask.shape[0] and 0 <= mx < mask.shape[1] and bool(mask[my, mx])
                 size = max(bx[2] - bx[0], bx[3] - bx[1]) / max(1, (y1 - y0))
                 score = float(r.boxes.conf[j]) * (1.0 if inside else 0.0) * (1.0 if size > 0.15 else 0.0)
                 if score > 0 and (best is None or score > best[0]):

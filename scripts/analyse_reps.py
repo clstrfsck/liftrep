@@ -17,7 +17,7 @@ Time:
 usage: analyse_reps.py OUT_DIR FRAMES.csv|FOLDER|PATTERN [...]
        e.g. analyse_reps.py work/out work   (all work/frames_*.csv)
 """
-import os, sys
+import glob, os, sys
 from pathlib import Path
 import numpy as np, pandas as pd
 from scipy.signal import savgol_filter, find_peaks
@@ -60,7 +60,7 @@ for a in sys.argv[2:]:
     if pa.is_dir():
         inputs += sorted(pa.glob("frames_*.csv"))
     elif any(ch in a for ch in "*?["):
-        inputs += sorted(Path().glob(a))
+        inputs += [Path(x) for x in sorted(glob.glob(a))]
     else:
         inputs.append(pa)
 if not inputs:
@@ -88,6 +88,24 @@ def stabilise(d, x, y):
 
 
 H_COLS = [f"h{a}{b}" for a in range(3) for b in range(3)]
+
+
+# output columns (written even when empty)
+REP_COLS = ("clip block rep rep_status lift rep_start_t rep_end_t rep_duration_s top_t top_frame "
+            "top_rec_us top_scene_x top_scene_y top_stab_x top_stab_y bottom_t bottom_frame bottom_rec_us "
+            "bottom_scene_x bottom_scene_y bottom_stab_x bottom_stab_y top_dwell_before_s bottom_dwell_s "
+            "top_dwell_after_s eccentric_start_t eccentric_s effort_start_t effort_end_t effort_s "
+            "range_stab_px effort_mean_vel_px_s effort_peak_vel_px_s first_top_dwell_truncated "
+            "track_ok_frac reanchors kp_valid_frac max_gap_s noise_frac tracking_quality "
+            "timing_outlier").split()
+EVENT_COLS = ("clip rep event t frame rec_us stab_x stab_y scene_x scene_y dwell_start_t dwell_end_t "
+              "dwell_s").split()
+CLIP_COLS = ("clip block start_t end_t start_frame end_frame duration_s lift tracked n_reps n_partial "
+             "n_spikes_removed n_reps_tracking_good mean_rep_s robust_range_stab_px valid_kp_frac "
+             "hip_below_shoulder box_aspect stab_valid_frac glitch_frames_masked "
+             "possible_video_change_t skipped").split()
+FRAME_COLS = ["frame", "t", "clip", "rep", "n_reps", "phase", "bar_stab_x", "bar_stab_y",
+              "bar_scene_x", "bar_scene_y", "person_w"] + H_COLS
 
 
 def head_speed(d):
@@ -155,6 +173,13 @@ def bridge_short_gaps(s, max_len):
     run_id = (gap != gap.shift()).cumsum()
     run_len = gap.groupby(run_id).transform("sum")
     return s.where(~gap | (run_len > max_len), filled)
+
+
+def n_changes(ids):
+    """Number of changes between consecutive known values (missing values are skipped)."""
+    v = np.asarray(ids, dtype=float)
+    v = v[~np.isnan(v)]
+    return int(np.count_nonzero(np.diff(v))) if len(v) > 1 else 0
 
 
 def runs_of(mask):
@@ -496,7 +521,7 @@ for ci, r in enumerate(runs, start=1):
             "first_top_dwell_truncated": rp["tb"][0] == 0,
             # tracking quality across the rep (top dwell end -> top dwell start after)
             "track_ok_frac": round(float(track_ok[tb_e:ta_s + 1].mean()), 2),
-            "reanchors": int(np.count_nonzero(np.diff(d.ref_id.values[tb_e:ta_s + 1]))),
+            "reanchors": n_changes(d.ref_id.values[tb_e:ta_s + 1]),
             "kp_valid_frac": round(float(kp_present[tb_e:ta_s + 1].mean()), 2),
             # longest unbridged tracking gap during the lowering or effort phase (0 = none)
             "max_gap_s": round(float(gap_len[tb_e:ta_s + 1].max()), 2),
@@ -601,9 +626,22 @@ for c in clip_rows:
     c["block"] = max(block, 1)
 if len(reps_df):
     reps_df.insert(1, "block", reps_df["clip"].map({c["clip"]: c["block"] for c in clip_rows}))
-reps_df.to_csv(out_dir / "reps.csv", index=False)
-pd.DataFrame(clip_rows).to_csv(out_dir / "clips.csv", index=False)
-pd.DataFrame(event_rows).to_csv(out_dir / "events.csv", index=False)
-if frame_tables:
-    pd.concat(frame_tables).to_csv(out_dir / "frames_annotation.csv.gz", index=False, float_format="%.6g")
-print(pd.DataFrame(clip_rows).to_string(index=False))
+# Always write every output with its full set of columns, even when a session has no clips or
+# reps, so later steps (annotate_video.py, add_chapters.py) can rely on them.
+def with_columns(df, cols):
+    for c in cols:
+        if c not in df:
+            df[c] = pd.Series(dtype=object)
+    return df[cols + [c for c in df.columns if c not in cols]]
+
+
+with_columns(reps_df, REP_COLS).to_csv(out_dir / "reps.csv", index=False)
+with_columns(pd.DataFrame(clip_rows), CLIP_COLS).to_csv(out_dir / "clips.csv", index=False)
+with_columns(pd.DataFrame(event_rows), EVENT_COLS).to_csv(out_dir / "events.csv", index=False)
+frames_out = pd.concat(frame_tables) if frame_tables else pd.DataFrame()
+with_columns(frames_out, FRAME_COLS).to_csv(out_dir / "frames_annotation.csv.gz", index=False,
+                                            float_format="%.6g")
+if not clip_rows:
+    print("no lift clips found: wrote empty outputs")
+if clip_rows:
+    print(pd.DataFrame(clip_rows).to_string(index=False))

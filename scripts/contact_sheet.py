@@ -4,6 +4,8 @@ from pathlib import Path
 
 video, out_dir = sys.argv[1], Path(sys.argv[2])
 step = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0
+if step <= 0:
+    raise SystemExit("STEP_S must be greater than 0")
 cols, rows, tw = 8, 8, 240
 out_dir.mkdir(parents=True, exist_ok=True)
 
