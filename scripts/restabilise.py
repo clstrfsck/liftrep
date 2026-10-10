@@ -50,7 +50,7 @@ def find_clips(df, fps):
     has = (df.p_conf.fillna(0) >= 0.4).values
     frames = df.frame.values
     runs, cur = [], None
-    for f, hp in zip(frames, has):
+    for f, hp in zip(frames, has, strict=True):
         if not hp:
             continue
         if cur and f - cur[1] <= MAX_GAP_S * fps:
@@ -135,8 +135,9 @@ def process_clip(job):
         small, cmask = content_thumb(g, r)
         cx = r["p_x0"] + r["p_x1"] if np.isfinite(r["p_x0"]) else r["scr_x0"] + r["scr_x1"]
         cy = r["p_y0"] + r["p_y1"] if np.isfinite(r["p_y0"]) else r["scr_y0"] + r["scr_y1"]
-        sharp = cv2.Laplacian(g[int(max(0, r["scr_y0"])):int(r["scr_y1"]), int(max(0, r["scr_x0"])):int(r["scr_x1"])],
-                              cv2.CV_64F).var()
+        sy0, sy1 = int(max(0, r["scr_y0"])), int(r["scr_y1"])
+        sx0, sx1 = int(max(0, r["scr_x0"])), int(r["scr_x1"])
+        sharp = cv2.Laplacian(g[sy0:sy1, sx0:sx1], cv2.CV_64F).var()
         feats[f] = (np.float32([k.pt for k in kp]), des, (cx / 2, cy / 2), sharp)
         thumbs[f] = (small, cmask)
     cap.release()
@@ -308,5 +309,6 @@ if __name__ == "__main__":
     out_path = Path(args.out_dir) / "frames_restab.csv"
     out.to_csv(out_path, index=False)
     in_clips = sum(b - a + 1 for a, b in clips)
-    print(f"registered {len(results)} of {in_clips} clip frames ({100 * len(results) / max(1, in_clips):.1f}%) "
+    pct = 100 * len(results) / max(1, in_clips)
+    print(f"registered {len(results)} of {in_clips} clip frames ({pct:.1f}%) "
           f"-> {out_path} in {time.time() - tic:.0f}s")

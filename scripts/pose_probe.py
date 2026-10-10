@@ -27,6 +27,7 @@ while cap.get(cv2.CAP_PROP_POS_MSEC) < t1 * 1000:
     if n % 125 == 1:
         cv2.imwrite(f"{out}_{saved}.jpg", cv2.resize(r.plot(), (960, 540))); saved += 1
         b = r.boxes
-        print(f"frame {n}: {len(b)} persons", [(round(float(c),2), [int(v) for v in xy]) for c, xy in zip(b.conf, b.xyxy)])
+        dets = [(round(float(c), 2), [int(v) for v in xy]) for c, xy in zip(b.conf, b.xyxy, strict=True)]
+        print(f"frame {n}: {len(b)} persons", dets)
 dt = time.time() - tic
 print(f"{n} frames in {dt:.1f}s = {n/dt:.1f} fps")

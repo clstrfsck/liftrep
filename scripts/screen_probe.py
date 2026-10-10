@@ -33,7 +33,9 @@ for t in times:
     vis = f.copy()
     if q is not None:
         cv2.polylines(vis, [q.astype(np.int32)], True, (0, 0, 255), 3)
-    cv2.putText(vis, f"t={t} otsu={thr:.0f} quad={'ok' if q is not None else 'none'}", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 2)
-    small = np.hstack([cv2.resize(vis, (960, 540)), cv2.cvtColor(cv2.resize(m, (960, 540)), cv2.COLOR_GRAY2BGR)])
+    label = f"t={t} otsu={thr:.0f} quad={'ok' if q is not None else 'none'}"
+    cv2.putText(vis, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 2)
+    mask_bgr = cv2.cvtColor(cv2.resize(m, (960, 540)), cv2.COLOR_GRAY2BGR)
+    small = np.hstack([cv2.resize(vis, (960, 540)), mask_bgr])
     cv2.imwrite(str(out_dir / f"probe_{t:07.1f}.jpg"), small)
     print(t, thr, None if q is None else q.tolist())

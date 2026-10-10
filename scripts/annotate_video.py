@@ -41,7 +41,8 @@ ap.add_argument("--start", type=float, default=0.0, help="seconds")
 ap.add_argument("--end", type=float, default=None, help="seconds (default: end of video)")
 ap.add_argument("--clip", type=int, default=None, help="render just this clip (with 1 s either side)")
 ap.add_argument("--no-chapters", action="store_true",
-                help="don't add clip / lift / rep chapter markers (added by default when ffmpeg is available)")
+                help="don't add clip / lift / rep chapter markers "
+                     "(added by default when ffmpeg is available)")
 ap.add_argument("--geom-smooth", type=float, default=0.4,
                 help="seconds over which the stabilising transform used for lines, arrows and the bar "
                      "marker is smoothed, removing jitter (0 = off)")
@@ -71,7 +72,7 @@ PHASES = ("top_dwell", "lowering", "bottom_dwell", "effort")
 fa["phase"] = fa["phase"].fillna("")
 live = {p: pd.Series(np.nan, index=fa.index) for p in PHASES}
 last = {p: pd.Series(np.nan, index=fa.index) for p in PHASES}
-for clip_id, g in fa.groupby("clip"):
+for _, g in fa.groupby("clip"):
     frames, phases = g.index.values, g["phase"].values
     run_start = 0
     last_val = dict.fromkeys(PHASES, np.nan)
@@ -87,7 +88,7 @@ for clip_id, g in fa.groupby("clip"):
 
 # last completed rep duration (top dwell end -> next top dwell start) per frame
 rep_dur = pd.Series(np.nan, index=fa.index)
-for clip_id, g in fa.groupby("clip"):
+for _, g in fa.groupby("clip"):
     t_eff_end, t_ecc_start, val = {}, {}, np.nan
     ph, reps, ts = g["phase"].values, g["rep"].values, g["t"].values
     for i in range(len(g)):
@@ -296,7 +297,7 @@ if ffmpeg:
             proc.stdin.write(buf)
         except BrokenPipeError:
             proc.wait()
-            raise SystemExit(f"ffmpeg stopped unexpectedly (exit code {proc.returncode})")
+            raise SystemExit(f"ffmpeg stopped unexpectedly (exit code {proc.returncode})") from None
 else:
     print("ffmpeg not found: writing mp4v without audio")
     vw = cv2.VideoWriter(args.out, cv2.VideoWriter_fourcc(*"mp4v"), fps, (W, H))
@@ -322,7 +323,8 @@ for f in range(f0, f1 + 1):
     else:
         vw.write(img)
     if (f - f0) % 1000 == 999:
-        print(f"{(f - f0 + 1)} / {f1 - f0 + 1} frames, {(f - f0 + 1) / (time.time() - tic):.0f} fps", flush=True)
+        done = f - f0 + 1
+        print(f"{done} / {f1 - f0 + 1} frames, {done / (time.time() - tic):.0f} fps", flush=True)
 
 if ffmpeg:
     proc.stdin.close()

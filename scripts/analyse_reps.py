@@ -194,7 +194,7 @@ def runs_of(mask):
     """(start, end) index pairs of contiguous True runs in a boolean array."""
     m = np.r_[False, mask, False].astype(int)
     starts, ends = np.flatnonzero(np.diff(m) == 1), np.flatnonzero(np.diff(m) == -1) - 1
-    return list(zip(starts, ends))
+    return list(zip(starts, ends, strict=True))
 
 
 def smooth_segments(y, ok):
@@ -334,7 +334,7 @@ def analyse_clip(ci, r):
                           "skipped": "too few frames with a tracked bar proxy"})
         return
     yy, vy = smooth_segments(y.values, ok)  # vy: px/s, +ve = moving down
-    # unbridged gaps (interior frames with no data) – rep detection still runs across them on
+    # unbridged gaps (interior frames with no data) - rep detection still runs across them on
     # the interpolated trace below, but reps whose movement spans one are flagged
     gap = ~ok
     gap_len = np.zeros(len(gap))
@@ -444,9 +444,10 @@ def analyse_clip(ci, r):
             continue
         bot_lv = yfill[bottom]
         rep_range = bot_lv - max(top_lv_b, top_lv_a)
-        if DEBUG_CLIP == ci:
-            print(f"  bot {t[b]:.2f}: onset {t[ecc_s]:.2f} stop {t[con_e]:.2f} top_b {top_lv_b:.0f} top_a {top_lv_a:.0f} "
-                  f"bot {bot_lv:.0f} range {rep_range:.0f} (min {MIN_REP_RANGE_FRAC * robust:.0f})")
+        if ci == DEBUG_CLIP:
+            print(f"  bot {t[b]:.2f}: onset {t[ecc_s]:.2f} stop {t[con_e]:.2f} "
+                  f"top_b {top_lv_b:.0f} top_a {top_lv_a:.0f} bot {bot_lv:.0f} "
+                  f"range {rep_range:.0f} (min {MIN_REP_RANGE_FRAC * robust:.0f})")
         if rep_range < MIN_REP_RANGE_FRAC * robust:
             continue
         band = DWELL_BAND * rep_range
@@ -540,9 +541,9 @@ def analyse_clip(ci, r):
         }
         # good = stabilisation valid, bar proxy seen for at least half the rep, and the raw
         # points hug the smoothed trace (scatter < 5% of the rep's range)
+        stab_ok = float(np.mean(d.h00.notna().values[tb_e:ta_s + 1]))
         rec["tracking_quality"] = "good" if (rec["kp_valid_frac"] >= 0.5 and rec["noise_frac"] <= 0.05
-                                             and rec["max_gap_s"] == 0
-                                             and float(np.mean(d.h00.notna().values[tb_e:ta_s + 1])) >= 0.9) else "check"
+                                             and rec["max_gap_s"] == 0 and stab_ok >= 0.9) else "check"
         rep_rows.append(rec)
         if rp["status"] != "ok":
             continue  # events only for counted reps
@@ -589,7 +590,7 @@ def analyse_clip(ci, r):
                        "phase": phase, "bar_stab_x": x.values, "bar_stab_y": yy,
                        "bar_scene_x": bx.values, "bar_scene_y": by.values,
                        "person_w": (d.p_x1 - d.p_x0).values})
-    for k, col in enumerate(H_COLS):
+    for col in H_COLS:
         ft[col] = d[col].values
     frame_tables.append(ft)
 
@@ -608,7 +609,8 @@ def analyse_clip(ci, r):
         ax[0].plot(t[rp["top_after"]], yy[rp["top_after"]], "^", color="C2")
         ax[1].axvspan(t[rp["bo"][1]], t[rp["ta"][0]], color="C1", alpha=0.25)
     ax[0].invert_yaxis(); ax[0].legend(loc="upper right"); ax[0].set_ylabel("stabilised y px (up = top)")
-    ax[0].set_title(f"clip {ci}: {lift}, {len(ok_reps)} reps (+{len(reps) - len(ok_reps)} partial, hollow), t={t[0]:.1f}-{t[-1]:.1f}s "
+    ax[0].set_title(f"clip {ci}: {lift}, {len(ok_reps)} reps "
+                    f"(+{len(reps) - len(ok_reps)} partial, hollow), t={t[0]:.1f}-{t[-1]:.1f}s "
                     "(green = top dwell, red = bottom dwell, orange = effort)")
     ax[1].plot(t, -vy, color="C1"); ax[1].axhline(0, color="k", lw=0.5)
     ax[1].set_ylabel("vertical velocity px/s (+ up)"); ax[1].set_xlabel("video time (s)")

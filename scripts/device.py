@@ -16,7 +16,8 @@ def pick_device(requested="auto"):
             return "mps"
         return "cpu"
     if req.startswith("cuda") and not torch.cuda.is_available():
-        raise SystemExit(f"--device {requested}: no usable NVIDIA GPU (is a CUDA build of PyTorch installed?)")
+        raise SystemExit(f"--device {requested}: no usable NVIDIA GPU "
+                         "(is a CUDA build of PyTorch installed?)")
     if req == "mps" and not torch.backends.mps.is_available():
         raise SystemExit("--device mps: Apple Silicon GPU not available on this machine")
     return "cuda:0" if req == "cuda" else req

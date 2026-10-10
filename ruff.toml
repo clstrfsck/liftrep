@@ -1,0 +1,38 @@
+# Ruff configuration for the scripts in this repository.
+# Rules are selected explicitly, so upgrading ruff doesn't silently change what is checked.
+
+line-length = 110
+target-version = "py310"
+
+[lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import sorting
+    "B",        # bugbear (likely bugs)
+    "UP",       # pyupgrade
+    "SIM",      # simplifications
+    "RUF",      # ruff-specific
+    "PERF",     # performance
+    "C4",       # comprehensions
+    "PIE",      # misc. lints
+    "FURB",     # refurb
+    "PLE", "PLW", "PLC",  # pylint errors, warnings, conventions
+    "RET",      # return statements
+    "ISC",      # implicit string concatenation
+    "FLY",      # static joins
+    "BLE",      # blind except
+    "PGH",      # pygrep hooks
+    "S",        # bandit (security)
+    "DTZ",      # timezone-naive datetimes
+    "LOG", "G", # logging
+    "T10",      # debugger left in
+    "YTT",      # sys.version comparisons
+    "EXE",      # executable files / shebangs
+]
+ignore = [
+    "E702",     # several short statements on one line are used deliberately in compact unpacking
+    "E731",     # small named lambdas are used for local predicates
+    "RUF005",   # false positives here: `array + [...]` is NumPy element-wise addition, not concatenation
+    "S603",     # subprocess calls run this project's own scripts and ffmpeg with fixed arguments
+]

@@ -63,7 +63,8 @@ rep features are derived from the bar's vertical motion.
 
 ## Setup (once)
 
-Works on macOS, Linux and Windows (tested with Python 3.12 on an Apple Silicon Mac). A GPU is strongly recommended:
+Works on macOS, Linux and Windows with Python 3.10 or newer (tested with Python 3.12 on an
+Apple Silicon Mac). A GPU is strongly recommended:
 an NVIDIA GPU (CUDA) or an Apple Silicon Mac. CPU-only works but is very slow (see
 [Choosing a device](#choosing-a-device)). ffmpeg is optional (used by the annotated video for H.264 output with audio).
 
@@ -415,6 +416,11 @@ onset and stop times, top and bottom levels, and range against the minimum range
 | `scripts/annotate_video.py` | Pass 3: annotated video (see above) |
 | `scripts/add_chapters.py VIDEO ANALYSIS_DIR OUT.mp4 [--offset S]` | Add clip / lift / rep chapters to a video without re-encoding |
 | `scripts/device.py` | Shared helper: picks the compute device (not run directly) |
+
+## Development
+
+The scripts are linted with [ruff](https://docs.astral.sh/ruff/); the rule set is pinned in
+`ruff.toml`. Run `ruff check scripts` before committing.
 
 ## Licence
 

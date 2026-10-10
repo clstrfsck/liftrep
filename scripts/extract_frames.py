@@ -126,7 +126,7 @@ while True:
             row.update(p_conf=best[0], p_x0=bx[0], p_y0=bx[1], p_x1=bx[2], p_y1=bx[3])
             kxy = r.keypoints.xy[j].cpu().numpy() + [cx0, cy0]
             kc = r.keypoints.conf[j].cpu().numpy()
-            for name, (kx, ky), c in zip(KP_NAMES, kxy, kc):
+            for name, (kx, ky), c in zip(KP_NAMES, kxy, kc, strict=True):
                 row[f"{name}_x"], row[f"{name}_y"], row[f"{name}_c"] = kx, ky, c
 
         # --- stabilisation: homography frame -> reference, on screen-plane features

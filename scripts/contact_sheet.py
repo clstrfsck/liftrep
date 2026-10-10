@@ -22,7 +22,8 @@ while t < dur:
         break
     th = cv2.resize(f, (tw, tw * 9 // 16))
     cv2.putText(th, f"{int(t//60):02d}:{t%60:04.1f}", (4, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3)
-    cv2.putText(th, f"{int(t//60):02d}:{t%60:04.1f}", (4, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1)
+    cv2.putText(th, f"{int(t//60):02d}:{t%60:04.1f}", (4, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                (0, 255, 255), 1)
     thumbs.append(th)
     t += step
 
