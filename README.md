@@ -124,6 +124,22 @@ cost in keypoint accuracy.
 
 ## Running
 
+### Whole pipeline in one command
+
+```bash
+./run_pipeline.sh "<video>.mp4"
+```
+
+Runs pass 1 and 1b (pose extraction and re-stabilisation), pass 2 (rep analysis) and pass 3
+(annotated video with chapters) in order. Results go to `work/<video name>/`: the analysis in
+`out/` and the video as `annotated.mp4`. Options: `--out-dir DIR`, `--jobs N`, `--device DEV`,
+`--model PATH`, `--overwrite` (replace an earlier run's results; otherwise the script stops),
+`--no-video` (skip pass 3); `./run_pipeline.sh --help` lists them. It can be run from any
+folder. It needs bash (macOS, Linux, or Git Bash/WSL on Windows); the individual passes below
+work on any OS.
+
+### Individual passes
+
 All commands are run from the project directory.
 
 ### Pass 1 – extract per-frame data (slow)
