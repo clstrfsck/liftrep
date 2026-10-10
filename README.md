@@ -301,7 +301,8 @@ phase shaded orange. Check these before trusting a clip's numbers.
   eye tracker's gaze point on its scene video, so use it to compare with where the wearer looked.
 - **`*_stab_x/y`** – pixel in the clip's stabilised frame (head motion removed). Use it for
   distances and speeds. It is comparable *within* a clip, not between clips.
-- **`*_t`** – seconds from the start of the video. **`*_frame`** – frame index.
+- **`*_t`** – seconds from the start of the video. **`*_frame`** – frame index. The frame
+  rate is read from the video (and, in pass 2, from the per-frame data), so any rate works.
 - **`*_rec_us`** – video time in microseconds, for joining with an eye tracker's recording
   timestamps when the recording and the scene video start together.
 

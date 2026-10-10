@@ -17,7 +17,7 @@ from pathlib import Path
 import cv2, pandas as pd
 
 
-def chapters(analysis_dir, offset, duration):
+def chapters(analysis_dir, offset, duration, fps=25.0):
     """List of (start_s, end_s, title) in the output video's time, covering [0, duration]."""
     adir = Path(analysis_dir)
     clips = pd.read_csv(adir / "clips.csv")
@@ -32,7 +32,7 @@ def chapters(analysis_dir, offset, duration):
         for _, rp in r.iterrows():
             flag = " [check]" if rp["tracking_quality"] != "good" else ""
             marks.append((rp["rep_start_t"], f"{name} - rep {int(rp['rep'])} of {len(r)}{flag}"))
-        marks.append((c["end_t"] + 1 / 25, "Between clips"))
+        marks.append((c["end_t"] + 1 / fps, "Between clips"))
     marks.sort(key=lambda m: m[0])
     if not marks or marks[0][0] > offset:
         marks.insert(0, (offset, "Between clips"))
@@ -64,9 +64,10 @@ def write_with_chapters(video, analysis_dir, out, offset=0.0):
     if Path(video).resolve() == Path(out).resolve():
         raise SystemExit("OUT must be a different file from VIDEO")
     cap = cv2.VideoCapture(str(video))
-    duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / cap.get(cv2.CAP_PROP_FPS)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    duration = cap.get(cv2.CAP_PROP_FRAME_COUNT) / fps
     cap.release()
-    chs = chapters(analysis_dir, offset, duration)
+    chs = chapters(analysis_dir, offset, duration, fps)
     meta = [";FFMETADATA1",
             "title=" + esc(Path(video).stem + " - lift rep annotations"),
             "comment=" + esc("Chapters: clip / lift / rep from analyse_reps.py")]

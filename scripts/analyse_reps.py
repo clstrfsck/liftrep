@@ -25,7 +25,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-FPS = 25.0
+FPS = 25.0                # fallback only: replaced by the rate measured from the input below
 KP_MIN_CONF = 0.5
 MIN_CLIP_S = 8.0          # shortest run of lifter detections treated as a clip
 MAX_GAP_S = 1.5           # detection gaps bridged inside a clip
@@ -63,6 +63,13 @@ if not inputs:
     raise SystemExit("no per-frame CSV files found")
 df = pd.concat([pd.read_csv(f) for f in inputs]).sort_values("frame").drop_duplicates("frame")
 df = df.set_index("frame", drop=False)
+# video frame rate, from the per-frame data (pass 1 records each frame's number and time)
+_ft = df[["frame", "t"]].dropna()
+if len(_ft) > 1:
+    _rate = np.diff(_ft.frame.values) / np.diff(_ft.t.values)
+    _rate = _rate[np.isfinite(_rate)]
+    if len(_rate):
+        FPS = float(np.median(_rate))
 
 
 def stabilise(d, x, y):
