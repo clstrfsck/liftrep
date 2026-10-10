@@ -17,12 +17,17 @@ Time:
 usage: analyse_reps.py OUT_DIR FRAMES.csv|FOLDER|PATTERN [...]
        e.g. analyse_reps.py work/out work   (all work/frames_*.csv)
 """
-import glob, os, sys
+import glob
+import os
+import sys
 from pathlib import Path
-import numpy as np, pandas as pd
-from scipy.signal import savgol_filter, find_peaks
-from scipy.ndimage import median_filter
+
 import matplotlib
+import numpy as np
+import pandas as pd
+from scipy.ndimage import median_filter
+from scipy.signal import find_peaks, savgol_filter
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -91,19 +96,22 @@ H_COLS = [f"h{a}{b}" for a in range(3) for b in range(3)]
 
 
 # output columns (written even when empty)
-REP_COLS = ("clip block rep rep_status lift rep_start_t rep_end_t rep_duration_s top_t top_frame "
-            "top_rec_us top_scene_x top_scene_y top_stab_x top_stab_y bottom_t bottom_frame bottom_rec_us "
-            "bottom_scene_x bottom_scene_y bottom_stab_x bottom_stab_y top_dwell_before_s bottom_dwell_s "
-            "top_dwell_after_s eccentric_start_t eccentric_s effort_start_t effort_end_t effort_s "
-            "range_stab_px effort_mean_vel_px_s effort_peak_vel_px_s first_top_dwell_truncated "
-            "track_ok_frac reanchors kp_valid_frac max_gap_s noise_frac tracking_quality "
-            "timing_outlier").split()
-EVENT_COLS = ("clip rep event t frame rec_us stab_x stab_y scene_x scene_y dwell_start_t dwell_end_t "
-              "dwell_s").split()
-CLIP_COLS = ("clip block start_t end_t start_frame end_frame duration_s lift tracked n_reps n_partial "
-             "n_spikes_removed n_reps_tracking_good mean_rep_s robust_range_stab_px valid_kp_frac "
-             "hip_below_shoulder box_aspect stab_valid_frac glitch_frames_masked "
-             "possible_video_change_t skipped").split()
+REP_COLS = ["clip", "block", "rep", "rep_status", "lift", "rep_start_t", "rep_end_t",
+            "rep_duration_s", "top_t", "top_frame", "top_rec_us", "top_scene_x", "top_scene_y",
+            "top_stab_x", "top_stab_y", "bottom_t", "bottom_frame", "bottom_rec_us",
+            "bottom_scene_x", "bottom_scene_y", "bottom_stab_x", "bottom_stab_y",
+            "top_dwell_before_s", "bottom_dwell_s", "top_dwell_after_s", "eccentric_start_t",
+            "eccentric_s", "effort_start_t", "effort_end_t", "effort_s", "range_stab_px",
+            "effort_mean_vel_px_s", "effort_peak_vel_px_s", "first_top_dwell_truncated",
+            "track_ok_frac", "reanchors", "kp_valid_frac", "max_gap_s", "noise_frac",
+            "tracking_quality", "timing_outlier"]
+EVENT_COLS = ["clip", "rep", "event", "t", "frame", "rec_us", "stab_x", "stab_y", "scene_x",
+              "scene_y", "dwell_start_t", "dwell_end_t", "dwell_s"]
+CLIP_COLS = ["clip", "block", "start_t", "end_t", "start_frame", "end_frame", "duration_s", "lift",
+             "tracked", "n_reps", "n_partial", "n_spikes_removed", "n_reps_tracking_good",
+             "mean_rep_s", "robust_range_stab_px", "valid_kp_frac", "hip_below_shoulder",
+             "box_aspect", "stab_valid_frac", "glitch_frames_masked", "possible_video_change_t",
+             "skipped"]
 FRAME_COLS = ["frame", "t", "clip", "rep", "n_reps", "phase", "bar_stab_x", "bar_stab_y",
               "bar_scene_x", "bar_scene_y", "person_w"] + H_COLS
 
@@ -253,7 +261,8 @@ runs = [r for r in runs if (r["end"] - r["start"]) / FPS >= MIN_CLIP_S]
 clip_rows, rep_rows, event_rows = [], [], []
 frame_tables = []  # per-frame rep/phase + stabilisation, for annotate_video.py
 
-for ci, r in enumerate(runs, start=1):
+def analyse_clip(ci, r):
+    """Analyse one clip: lift type, bar trace, reps, phases; append to the output lists."""
     d = df.loc[r["start"]:r["end"]].copy()
     d.loc[d.seg_id != r["seg"], H_COLS] = np.nan  # unregistered frames: kept, as gaps
     t = d.t.values
@@ -265,12 +274,12 @@ for ci, r in enumerate(runs, start=1):
                           "duration_s": round(t[-1] - t[0], 2), "n_reps": 0,
                           "stab_valid_frac": round(stab_valid, 3),
                           "skipped": "mostly unregistered (observer moving or looking away)"})
-        continue
+        return
 
     # --- lift type: in a squat the athlete is upright, so the hips sit well below the
     # shoulders (relative to body height); lying on a bench they are level.
-    hx, hy = kp_mean(d, ["l_hip", "r_hip"])
-    sx, sy = kp_mean(d, ["l_sho", "r_sho"])
+    _, hy = kp_mean(d, ["l_hip", "r_hip"])
+    _, sy = kp_mean(d, ["l_sho", "r_sho"])
     box_h = (d.p_y1 - d.p_y0)
     hip_below_sho = float(np.nanmedian((hy - sy) / box_h)) if (hy - sy).notna().any() else np.nan
     aspect = float(np.nanmedian(box_h / (d.p_x1 - d.p_x0)))
@@ -310,7 +319,7 @@ for ci, r in enumerate(runs, start=1):
     valid_frac = y.notna().mean()
     kp_present = y.notna().values  # before gap bridging
     track_ok = d.h00.notna().values & kp_present
-    max_bridge = int(round(MAX_BRIDGE_S * FPS))
+    max_bridge = round(MAX_BRIDGE_S * FPS)
     y = bridge_short_gaps(y, max_bridge)
     x = bridge_short_gaps(x, max_bridge)
     ok = y.notna().values  # observed, or inside a bridged short gap
@@ -323,7 +332,7 @@ for ci, r in enumerate(runs, start=1):
                           "hip_below_shoulder": round(hip_below_sho, 3), "box_aspect": round(aspect, 2),
                           "stab_valid_frac": round(stab_valid, 3),
                           "skipped": "too few frames with a tracked bar proxy"})
-        continue
+        return
     yy, vy = smooth_segments(y.values, ok)  # vy: px/s, +ve = moving down
     # unbridged gaps (interior frames with no data) – rep detection still runs across them on
     # the interpolated trace below, but reps whose movement spans one are flagged
@@ -349,7 +358,7 @@ for ci, r in enumerate(runs, start=1):
         is brief; a long stationary period is set-up, a hold or paused playback), or at
         `stop`."""
         j, still, last = i, 0, i
-        max_stall = int(round(MAX_STALL_S * FPS))
+        max_stall = round(MAX_STALL_S * FPS)
         while (j + step - stop) * step <= 0:
             j += step
             if moving(j):
@@ -399,7 +408,7 @@ for ci, r in enumerate(runs, start=1):
         # the contiguous downward (upward) movement next to the bottom, not the fastest
         # movement anywhere in the window
         # (step over the bottom dwell first: the bar is momentarily still at the bottom)
-        max_skip = int(round(0.5 * FPS))
+        max_skip = round(0.5 * FPS)
         d0, skip = b, 0
         while d0 > lo and vmed[d0 - 1] <= v_floor and skip < max_skip:
             d0, skip = d0 - 1, skip + 1
@@ -420,11 +429,12 @@ for ci, r in enumerate(runs, start=1):
         # (within NEAR_TOP_FRAC of the travel from the highest point after the bottom), so a
         # brief stall partway up (a sticking point) stays inside the effort phase.
         hi_a = float(yfill[b:hi + 1].min())
-        near_a = lambda j: yfill[j] <= hi_a + NEAR_TOP_FRAC * (yfill[b] - hi_a)
+        near_top = hi_a + NEAR_TOP_FRAC * (yfill[b] - hi_a)
+        near_a = lambda j, lim=near_top: yfill[j] <= lim
         # descent onset: where the bar was last stationary (sticking points happen on the
         # way up, so no near-the-top requirement here)
-        ecc_s = walk(i_pd, -1, lo, lambda j: vmed[j] > thr_d)
-        con_e = walk(i_pu, +1, hi, lambda j: -vmed[j] > thr_u, near_a)  # ascent stop
+        ecc_s = walk(i_pd, -1, lo, lambda j, thr=thr_d: vmed[j] > thr)
+        con_e = walk(i_pu, +1, hi, lambda j, thr=thr_u: -vmed[j] > thr, near_a)  # ascent stop
         # top levels: the bar just outside the movement (a few frames' median)
         pre = yfill[max(lo, ecc_s - 3):ecc_s + 1]
         post = yfill[con_e:min(hi, con_e + 3) + 1]
@@ -448,9 +458,9 @@ for ci, r in enumerate(runs, start=1):
         if top_before is None or top_after is None:
             continue
         spike = (t[bo_s] - t[tb_e] < MIN_ECCENTRIC_S) or (t[ta_s] - t[bo_e] < MIN_EFFORT_S)
-        reps.append(dict(top_before=top_before, tb=(tb_s, tb_e), bottom=bottom, bo=(bo_s, bo_e),
-                         top_after=top_after, ta=(ta_s, ta_e), range=rep_range, spike=spike,
-                         speed=max(vfill[i_pd], -vfill[i_pu])))
+        reps.append({"top_before": top_before, "tb": (tb_s, tb_e), "bottom": bottom, "bo": (bo_s, bo_e),
+                     "top_after": top_after, "ta": (ta_s, ta_e), "range": rep_range, "spike": spike,
+                     "speed": max(vfill[i_pd], -vfill[i_pu])})
       # implausibly fast compared with the clip's other reps: a tracking glitch
       if len(reps) >= 3:
           med_speed = np.median([rp["speed"] for rp in reps])
@@ -462,7 +472,7 @@ for ci, r in enumerate(runs, start=1):
     fr = d.frame.values
     def ev(i):
         """Pixel/time record for index i in this clip."""
-        return {"t": round(t[i], 3), "frame": int(fr[i]), "rec_us": int(round(t[i] * 1e6)),
+        return {"t": round(t[i], 3), "frame": int(fr[i]), "rec_us": round(t[i] * 1e6),
                 "stab_x": round(float(x.values[i]), 1) if np.isfinite(x.values[i]) else np.nan,
                 "stab_y": round(float(yy[i]), 1),
                 "scene_x": round(float(bx.iloc[i]), 1) if np.isfinite(bx.iloc[i]) else np.nan,
@@ -495,7 +505,6 @@ for ci, r in enumerate(runs, start=1):
             n_ok += 1
         n = n_ok if rp["status"] == "ok" else np.nan
         tb_s, tb_e = rp["tb"]; bo_s, bo_e = rp["bo"]; ta_s, ta_e = rp["ta"]
-        ecc = slice(tb_e, bo_s + 1)        # lowering: leave top -> arrive bottom
         con = slice(bo_e, ta_s + 1)        # effort (concentric): leave bottom -> arrive top
         top_ev, bot_ev, top2_ev = ev(rp["top_before"]), ev(rp["bottom"]), ev(rp["top_after"])
         con_v = -vy[con]                   # +ve = upward
@@ -604,6 +613,11 @@ for ci, r in enumerate(runs, start=1):
     ax[1].plot(t, -vy, color="C1"); ax[1].axhline(0, color="k", lw=0.5)
     ax[1].set_ylabel("vertical velocity px/s (+ up)"); ax[1].set_xlabel("video time (s)")
     plt.tight_layout(); plt.savefig(out_dir / "plots" / f"clip_{ci:02d}.png", dpi=80); plt.close(fig)
+
+
+for ci, r in enumerate(runs, start=1):
+    analyse_clip(ci, r)
+
 
 # --- timing outliers within a clip. Informational only: a genuinely fatigued (slow) rep
 # will also show up here, so these are never dropped; paused playback is the usual false case.

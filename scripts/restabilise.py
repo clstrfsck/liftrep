@@ -23,10 +23,15 @@ analyse_reps.py instead of the pass-1 CSVs.
 
 usage: restabilise.py VIDEO PASS1_DIR OUT_DIR [--jobs N]
 """
-import argparse, os, time
+import argparse
+import os
+import time
 from multiprocessing import Pool
 from pathlib import Path
-import cv2, numpy as np, pandas as pd
+
+import cv2
+import numpy as np
+import pandas as pd
 
 FPS_DEFAULT = 25.0
 MIN_CLIP_S, MAX_GAP_S = 8.0, 1.5      # same clip rule as analyse_reps.py
@@ -176,6 +181,10 @@ def process_clip(job):
     # change shows as a run of frames whose comparison fails or scores low. It is confirmed
     # only if no frame shortly before the run matches any frame shortly after it (motion
     # blur also breaks comparisons briefly, but the content either side is the same).
+    def sharpest(frames):
+        """The (up to) four sharpest of the given frames."""
+        return sorted(frames, key=lambda f: -feats[f][3])[:4]
+
     fr = sorted(feats)
     bad = [f for f in fr if f - CUT_GAP in feats and not (content_sim(f, f - CUT_GAP) >= CUT_SIM)]
     cuts, run = [], []
@@ -187,8 +196,7 @@ def process_clip(job):
             s_, e_ = run[0], run[-1]
             # the sharpest frames up to CONFIRM_S either side (motion blur next to a fast
             # head movement would otherwise make the same video look different)
-            win = int(round(CONFIRM_S * fps))
-            sharpest = lambda xs: sorted(xs, key=lambda x: -feats[x][3])[:4]
+            win = round(CONFIRM_S * fps)
             before = sharpest([x for x in fr if s_ - CUT_GAP - win <= x <= s_ - CUT_GAP])
             after = sharpest([x for x in fr if e_ + 1 <= x <= e_ + win])
             same = any(content_sim(x, y) >= SAME_SIM for x in after for y in before)

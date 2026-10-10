@@ -11,10 +11,14 @@ Writes one row per frame to a CSV file for the later passes.
 usage: extract_frames.py VIDEO OUT.csv [--start S] [--end S] [--model yolo11x-pose.pt]
                          [--device auto|cuda|cuda:N|mps|cpu]
 """
-import argparse, time
-import cv2, numpy as np, pandas as pd
+import argparse
+import time
+
+import cv2
+import numpy as np
+import pandas as pd
+from device import describe, pick_device
 from ultralytics import YOLO
-from device import pick_device, describe
 
 KP_NAMES = ["nose", "l_eye", "r_eye", "l_ear", "r_ear", "l_sho", "r_sho", "l_elb", "r_elb",
             "l_wri", "r_wri", "l_hip", "r_hip", "l_knee", "r_knee", "l_ank", "r_ank"]
@@ -40,7 +44,7 @@ bf = cv2.BFMatcher(cv2.NORM_HAMMING)
 
 cap = cv2.VideoCapture(args.video)
 fps = cap.get(cv2.CAP_PROP_FPS)
-start_frame = int(round(args.start * fps))
+start_frame = round(args.start * fps)
 cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
 

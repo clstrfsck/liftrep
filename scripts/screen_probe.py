@@ -1,6 +1,9 @@
 """Probe: detect the projector-screen quadrilateral in sample frames and draw it."""
-import sys, cv2, numpy as np
+import sys
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 video, out_dir = sys.argv[1], Path(sys.argv[2])
 times = [float(t) for t in sys.argv[3:]]

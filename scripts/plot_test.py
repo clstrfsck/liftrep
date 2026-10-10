@@ -1,5 +1,11 @@
-import sys, numpy as np, pandas as pd, matplotlib
-matplotlib.use("Agg"); import matplotlib.pyplot as plt
+import sys
+
+import matplotlib
+import pandas as pd
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 df = pd.read_csv(sys.argv[1]); out = sys.argv[2]
 def stab(df, px, py):
     x, y = df[px].values, df[py].values

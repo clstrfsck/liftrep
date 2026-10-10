@@ -22,9 +22,15 @@ clips.csv and reps.csv). Uses ffmpeg (H.264, with the original audio) if it is o
 OpenCV's mp4v encoder (no audio). With ffmpeg, chapter markers for each clip / lift / rep
 are added (see add_chapters.py) unless --no-chapters is given.
 """
-import argparse, shutil, subprocess, time
+import argparse
+import shutil
+import subprocess
+import time
 from pathlib import Path
-import cv2, numpy as np, pandas as pd
+
+import cv2
+import numpy as np
+import pandas as pd
 from add_chapters import write_with_chapters
 
 ap = argparse.ArgumentParser()
@@ -56,7 +62,7 @@ start, end = args.start, args.end if args.end is not None else n_frames / fps
 if args.clip is not None:
     c = clips.loc[args.clip]
     start, end = max(0.0, c["start_t"] - 1), c["end_t"] + 1
-f0, f1 = int(round(start * fps)), min(n_frames - 1, int(round(end * fps)))
+f0, f1 = round(start * fps), min(n_frames - 1, round(end * fps))
 
 # ------------------------------------------------------------- per-frame phase timers
 # For each phase, the live elapsed time while in it and the duration of the last completed
@@ -123,8 +129,8 @@ def _inv(row):
 
 fa[HINV_COLS] = (np.apply_along_axis(_inv, 1, fa[H_COLS].values.astype(float)) if len(fa)
                  else np.empty((0, 9)))  # empty session: nothing to draw
-win = int(round(args.geom_smooth * fps)) | 1
-for clip_id, idx in fa.groupby("clip").groups.items():
+win = round(args.geom_smooth * fps) | 1
+for idx in fa.groupby("clip").groups.values():
     g = fa.loc[idx, HINV_COLS]
     full = pd.RangeIndex(idx.min(), idx.max() + 1)
     g = g.reindex(full).interpolate(limit_direction="both")
@@ -198,14 +204,14 @@ def smooth_labels(geo):
     Only the label positions are smoothed; the lines and arrows keep their per-frame
     positions. Centring (rather than a running average) means labels don't lag behind.
     """
-    win = int(round(args.label_smooth * fps))
+    win = round(args.label_smooth * fps)
     if win < 2 or not geo:
         return {f: {k: g[k] for k in LABELS} for f, g in geo.items()}
     win |= 1  # odd
     frames = np.array(sorted(geo))
     clip_of = pd.Series([geo[f]["clip"] for f in frames], index=frames)
     out = {f: {} for f in frames}
-    for _, idx in clip_of.groupby(clip_of).groups.items():
+    for idx in clip_of.groupby(clip_of).groups.values():
         full = pd.RangeIndex(idx.min(), idx.max() + 1)  # include gaps, then interpolate
         for k in LABELS:
             xy = pd.DataFrame([geo[f][k] for f in idx], index=idx, columns=["x", "y"]).reindex(full)

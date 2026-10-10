@@ -3,9 +3,12 @@
 
 usage: pose_probe.py VIDEO T0 T1 MODEL OUT_PREFIX [DEVICE]   (DEVICE defaults to auto)
 """
-import sys, time, cv2, numpy as np
+import sys
+import time
+
+import cv2
+from device import describe, pick_device
 from ultralytics import YOLO
-from device import pick_device, describe
 
 video, t0, t1, model_name, out = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), sys.argv[4], sys.argv[5]
 device = pick_device(sys.argv[6] if len(sys.argv) > 6 else "auto")

@@ -12,9 +12,14 @@ usage: add_chapters.py VIDEO ANALYSIS_DIR OUT.mp4 [--offset S]
 time range (annotate_video.py --start/--clip); 0 for a whole-video render.
 OUT may not be the same file as VIDEO. Requires ffmpeg on the PATH.
 """
-import argparse, shutil, subprocess, tempfile
+import argparse
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
-import cv2, pandas as pd
+
+import cv2
+import pandas as pd
 
 
 def chapters(analysis_dir, offset, duration, fps=25.0):
@@ -74,8 +79,8 @@ def write_with_chapters(video, analysis_dir, out, offset=0.0):
             "title=" + esc(Path(video).stem + " - lift rep annotations"),
             "comment=" + esc("Chapters: clip / lift / rep from analyse_reps.py")]
     for s, e, title in chs:
-        meta += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(round(s * 1000))}",
-                 f"END={int(round(e * 1000))}", "title=" + esc(title)]
+        meta += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={round(s * 1000)}",
+                 f"END={round(e * 1000)}", "title=" + esc(title)]
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as fh:
         fh.write("\n".join(meta) + "\n")
         meta_path = fh.name

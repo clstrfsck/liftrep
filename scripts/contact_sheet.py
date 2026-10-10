@@ -1,6 +1,9 @@
 """Contact sheets of the scene video: one labelled thumbnail every STEP seconds."""
-import sys, cv2, numpy as np
+import sys
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 video, out_dir = sys.argv[1], Path(sys.argv[2])
 step = float(sys.argv[3]) if len(sys.argv) > 3 else 10.0

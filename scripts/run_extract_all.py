@@ -8,10 +8,16 @@ pass-1 chunk numbers its segments and chains its transforms independently.
 usage: run_extract_all.py VIDEO [--out-dir work] [--jobs N] [--device auto|cuda|mps|cpu]
                           [--model models/yolo11x-pose.pt] [--overwrite] [--no-restabilise]
 """
-import argparse, os, subprocess, sys, time
+import argparse
+import os
+import subprocess
+import sys
+import time
+from contextlib import ExitStack
 from pathlib import Path
+
 import cv2
-from device import pick_device, describe
+from device import describe, pick_device
 
 ap = argparse.ArgumentParser()
 ap.add_argument("video")
@@ -67,27 +73,27 @@ if device == "cpu":  # share the cores between processes instead of oversubscrib
     env["OMP_NUM_THREADS"] = str(max(1, cores // jobs))
 
 step = duration / jobs
-procs = []
-for i in range(jobs):
-    start = int(i * step)
-    end = int((i + 1) * step) if i < jobs - 1 else int(duration) + 1
-    log = open(out_dir / f"log_{start}.txt", "w")
-    cmd = [sys.executable, str(extractor), args.video, str(out_dir / f"frames_{start}.csv"),
-           "--start", str(start), "--end", str(end), "--device", device, "--model", args.model]
-    procs.append((start, end, log, subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)))
-    print(f"  chunk {start:>5}-{end:<5}s -> {out_dir / f'frames_{start}.csv'}")
-
-# list of this run's chunks, read by restabilise.py
-(out_dir / "chunks.txt").write_text("\n".join(f"frames_{s}.csv" for s, _, _, _ in procs) + "\n")
-
-tic = time.time()
 failed = 0
-for start, end, log, p in procs:
-    rc = p.wait()
-    log.close()
-    if rc != 0:
-        failed += 1
-        print(f"chunk {start}-{end}s FAILED (exit {rc}); see {out_dir / f'log_{start}.txt'}")
+with ExitStack() as logs:  # each chunk's log file stays open until its process ends
+    procs = []
+    for i in range(jobs):
+        start = int(i * step)
+        end = int((i + 1) * step) if i < jobs - 1 else int(duration) + 1
+        log = logs.enter_context(open(out_dir / f"log_{start}.txt", "w"))
+        cmd = [sys.executable, str(extractor), args.video, str(out_dir / f"frames_{start}.csv"),
+               "--start", str(start), "--end", str(end), "--device", device, "--model", args.model]
+        procs.append((start, end, subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)))
+        print(f"  chunk {start:>5}-{end:<5}s -> {out_dir / f'frames_{start}.csv'}")
+
+    # list of this run's chunks, read by restabilise.py
+    (out_dir / "chunks.txt").write_text("\n".join(f"frames_{s}.csv" for s, _, _ in procs) + "\n")
+
+    tic = time.time()
+    for start, end, p in procs:
+        rc = p.wait()
+        if rc != 0:
+            failed += 1
+            print(f"chunk {start}-{end}s FAILED (exit {rc}); see {out_dir / f'log_{start}.txt'}")
 print(f"{'pass 1 done' if not failed else f'{failed} chunk(s) failed'} in {(time.time() - tic) / 60:.1f} min")
 if failed:
     sys.exit(1)
@@ -99,7 +105,7 @@ if args.no_restabilise:
     sys.exit(0)
 print("pass 1b: re-stabilising clips ...", flush=True)
 rc = subprocess.run([sys.executable, str(Path(__file__).with_name("restabilise.py")),
-                     args.video, str(out_dir), str(restab_dir)]).returncode
+                     args.video, str(out_dir), str(restab_dir)], check=False).returncode
 if rc != 0:
     sys.exit(rc)
 print(f"ALL DONE. Next: analyse_reps.py {out_dir / 'out'} {restab_dir}")
