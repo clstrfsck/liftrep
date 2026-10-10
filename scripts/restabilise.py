@@ -187,14 +187,20 @@ if __name__ == "__main__":
             results += res
             print(f"  {k}/{len(jobs)} clips done ({time.time() - tic:.0f}s)", flush=True)
 
-    new = pd.DataFrame(results).set_index("frame")
     out = df.set_index("frame", drop=False)
     for c in H_COLS + ["h_inliers", "ref_id", "seg_id"]:
         out[c] = np.nan
-    out.loc[new.index, new.columns] = new.values
+    if results:
+        new = pd.DataFrame(results).set_index("frame")
+        out.loc[new.index, new.columns] = new.values
+    else:
+        print("no lift clips found: writing the data without stabilisation")
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
+    # marker checked by analyse_reps.py: pass-1 transforms and segment IDs are chunk-local
+    # and must not be analysed directly
+    out["stabilisation"] = "restab"
     out_path = Path(args.out_dir) / "frames_restab.csv"
     out.to_csv(out_path, index=False)
     in_clips = sum(b - a + 1 for a, b in clips)
-    print(f"registered {len(new)} of {in_clips} clip frames ({100 * len(new) / in_clips:.1f}%) "
+    print(f"registered {len(results)} of {in_clips} clip frames ({100 * len(results) / max(1, in_clips):.1f}%) "
           f"-> {out_path} in {time.time() - tic:.0f}s")

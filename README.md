@@ -28,13 +28,17 @@ rep features are derived from the bar's vertical motion.
    Pass 1 builds each frame's transform by chaining from earlier frames, so a single bad
    link (motion blur, a glance away) corrupts every later frame. Pass 1b replaces it.
 
-1b. **Pass 1b – re-stabilisation** (`scripts/restabilise.py`, CPU, ≈ 5–10 min)
+1b. **Pass 1b – re-stabilisation** (`scripts/restabilise.py`, CPU, ≈ 5–10 min; **required**,
+   and run automatically after pass 1)
    - Finds the lift clips from the pass-1 person detections.
    - Per clip, picks a sharp reference frame from the middle and matches every frame
      **directly** to it. A frame that can't be matched directly is matched to the nearest
      registered keyframe, so a transform is never more than two links from the reference.
    - Rejects transforms whose rotation, shear or scale at the athlete is implausible.
    - Writes a copy of the per-frame data with the stabilisation replaced.
+   - Also joins the pass-1 chunks: each chunk numbers its segments from 0 and chains its own
+     transforms, so a lift crossing a chunk boundary would otherwise be split, or merged
+     across unrelated coordinate systems. Pass 2 therefore refuses raw pass-1 files.
 
 2. **Pass 2 – rep analysis** (`scripts/analyse_reps.py`, fast, seconds)
    - Splits the session into lift clips (continuous runs where an athlete is on screen),
@@ -114,7 +118,7 @@ All commands are run from the project directory.
 ### Pass 1 – extract per-frame data (slow)
 
 Whole video, split into parallel chunks (outputs `work/frames_<start>.csv`, logs
-`work/log_<start>.txt`):
+`work/log_<start>.txt`), followed automatically by pass 1b (output `work/restab/`):
 
 ```bash
 .venv/bin/python scripts/run_extract_all.py "<video>.mp4"
@@ -128,6 +132,7 @@ The video's length is read automatically and split into equal chunks. Options:
 | `--jobs` | 4 on a GPU; about one per 4 CPU cores on CPU | Number of parallel processes |
 | `--device` | `auto` | See [Choosing a device](#choosing-a-device) |
 | `--model` | `models/yolo11x-pose.pt` | Pose model |
+| `--no-restabilise` | off | Skip pass 1b; run `restabilise.py` yourself before pass 2 |
 
 Several processes help even on one GPU, because video decoding and feature matching run on
 the CPU while the GPU runs the pose model; beyond about 4 the gain is small. To watch
@@ -145,6 +150,9 @@ Options: `--start` / `--end` (seconds), `--device` (default `auto`), `--model` (
 
 ### Pass 1b – re-stabilise (CPU, ≈ 5–10 min)
 
+`run_extract_all.py` runs this for you. To run it on its own (for example after
+`--no-restabilise`, or after re-running pass 1 for part of the video):
+
 ```bash
 .venv/bin/python scripts/restabilise.py "<video>.mp4" work work/restab
 ```
@@ -158,12 +166,11 @@ Reads the pass-1 CSVs in `work/`, writes `work/restab/frames_restab.csv`. Option
 .venv/bin/python scripts/analyse_reps.py work/out work/restab
 ```
 
-The first argument is the output directory. The rest are the per-frame CSVs from pass 1b
-(or directly from pass 1, which works but with the less reliable chained stabilisation),
-given as files, a folder (all `frames_*.csv` in it) or a wildcard pattern such as
-`"work/frames_*.csv"` (expanded by the script, so it also works in Windows shells). Chunks
-are merged automatically. Pass 2 runs on the CPU and can be re-run freely after changing
-thresholds without repeating pass 1.
+The first argument is the output directory. The rest are the per-frame CSVs from pass 1b,
+given as files, a folder (all `frames_*.csv` in it) or a wildcard pattern (expanded by the
+script, so it also works in Windows shells). Raw pass-1 CSVs are refused, with a message
+to run `restabilise.py` first. Pass 2 runs on the CPU and can be re-run freely after
+changing thresholds without repeating pass 1 or 1b.
 
 ### Pass 3 – annotated video (optional, ≈ 5 min for the whole video)
 

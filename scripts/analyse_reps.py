@@ -65,6 +65,12 @@ for a in sys.argv[2:]:
 if not inputs:
     raise SystemExit("no per-frame CSV files found")
 df = pd.concat([pd.read_csv(f) for f in inputs]).sort_values("frame").drop_duplicates("frame")
+if "stabilisation" not in df.columns or not (df["stabilisation"] == "restab").all():
+    # Pass-1 chunks each number their segments from 0 and chain their own transforms, so a lift
+    # crossing a chunk boundary would be split, or merged across unrelated coordinate systems.
+    raise SystemExit("These per-frame CSVs come straight from pass 1. Run restabilise.py on them first "
+                     "(run_extract_all.py does this automatically) and analyse its output folder, "
+                     "e.g. work/restab.")
 df = df.set_index("frame", drop=False)
 # video frame rate, from the per-frame data (pass 1 records each frame's number and time)
 _ft = df[["frame", "t"]].dropna()

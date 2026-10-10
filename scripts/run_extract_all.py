@@ -1,10 +1,12 @@
-"""Run pass-1 extraction over a whole video in parallel chunks (any OS).
+"""Run pass-1 extraction over a whole video in parallel chunks (any OS), then pass 1b.
 
 Splits the video into JOBS equal time chunks, runs extract_frames.py on each in its own
 process, and waits for them all. Outputs work/frames_<start>.csv and work/log_<start>.txt.
+Then runs restabilise.py (pass 1b) into work/restab/, which analyse_reps.py requires: each
+pass-1 chunk numbers its segments and chains its transforms independently.
 
 usage: run_extract_all.py VIDEO [--out-dir work] [--jobs N] [--device auto|cuda|mps|cpu]
-                          [--model models/yolo11x-pose.pt]
+                          [--model models/yolo11x-pose.pt] [--no-restabilise]
 """
 import argparse, os, subprocess, sys, time
 from pathlib import Path
@@ -18,6 +20,8 @@ ap.add_argument("--jobs", type=int, default=0,
                 help="parallel processes (default: 4 on a GPU, about one per 4 CPU cores on CPU)")
 ap.add_argument("--device", default="auto")
 ap.add_argument("--model", default="models/yolo11x-pose.pt")
+ap.add_argument("--no-restabilise", action="store_true",
+                help="skip pass 1b (re-stabilisation); it must then be run before analyse_reps.py")
 args = ap.parse_args()
 
 device = pick_device(args.device)
@@ -59,5 +63,18 @@ for start, end, log, p in procs:
     if rc != 0:
         failed += 1
         print(f"chunk {start}-{end}s FAILED (exit {rc}); see {out_dir / f'log_{start}.txt'}")
-print(f"{'ALL DONE' if not failed else f'{failed} chunk(s) failed'} in {(time.time() - tic) / 60:.1f} min")
-sys.exit(1 if failed else 0)
+print(f"{'pass 1 done' if not failed else f'{failed} chunk(s) failed'} in {(time.time() - tic) / 60:.1f} min")
+if failed:
+    sys.exit(1)
+
+# pass 1b: required before analysis (pass-1 chunks have independent coordinate systems)
+restab_dir = out_dir / "restab"
+if args.no_restabilise:
+    print(f"skipped re-stabilisation; run: restabilise.py \"{args.video}\" {out_dir} {restab_dir}")
+    sys.exit(0)
+print("pass 1b: re-stabilising clips ...", flush=True)
+rc = subprocess.run([sys.executable, str(Path(__file__).with_name("restabilise.py")),
+                     args.video, str(out_dir), str(restab_dir)]).returncode
+if rc != 0:
+    sys.exit(rc)
+print(f"ALL DONE. Next: analyse_reps.py {out_dir / 'out'} {restab_dir}")
