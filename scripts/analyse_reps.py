@@ -20,7 +20,8 @@ usage: analyse_reps.py OUT_DIR FRAMES.csv|FOLDER|PATTERN [...]
 import os, sys
 from pathlib import Path
 import numpy as np, pandas as pd
-from scipy.signal import savgol_filter, find_peaks, medfilt
+from scipy.signal import savgol_filter, find_peaks
+from scipy.ndimage import median_filter
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -28,6 +29,8 @@ import matplotlib.pyplot as plt
 FPS = 25.0                # fallback only: replaced by the rate measured from the input below
 KP_MIN_CONF = 0.5
 MIN_CLIP_S = 8.0          # shortest run of lifter detections treated as a clip
+MAX_BRIDGE_S = 0.5        # tracking gaps up to this long are bridged by interpolation;
+                          # longer gaps are left as gaps (never filtered or measured across)
 MAX_GAP_S = 1.5           # detection gaps bridged inside a clip
 DWELL_BAND = 0.10         # within 10% of rep range of the top/bottom level = "dwelling"
 V_STILL_FRAC = 0.12       # moving = faster than 12% of the phase's peak speed...
@@ -137,6 +140,44 @@ def rebase(d):
     return d, float(np.mean(good))
 
 
+def bridge_short_gaps(s, max_len):
+    """Linearly fill interior gaps of at most max_len samples; leave longer gaps entirely
+    unfilled (pandas' interpolate(limit=...) would fill the first max_len of every gap)."""
+    filled = s.interpolate(limit_area="inside")
+    gap = s.isna()
+    run_id = (gap != gap.shift()).cumsum()
+    run_len = gap.groupby(run_id).transform("sum")
+    return s.where(~gap | (run_len > max_len), filled)
+
+
+def runs_of(mask):
+    """(start, end) index pairs of contiguous True runs in a boolean array."""
+    m = np.r_[False, mask, False].astype(int)
+    starts, ends = np.flatnonzero(np.diff(m) == 1), np.flatnonzero(np.diff(m) == -1) - 1
+    return list(zip(starts, ends))
+
+
+def smooth_segments(y, ok):
+    """Despike, smooth and differentiate each contiguous stretch of data separately, so no
+    filter window or velocity spans an unbridged gap. Returns (smoothed y, velocity px/s)."""
+    yy, vy = np.full(len(y), np.nan), np.full(len(y), np.nan)
+    for a, b in runs_of(ok):
+        seg = y[a:b + 1]
+        n = len(seg)
+        if n == 1:
+            yy[a], vy[a] = seg[0], 0.0
+            continue
+        med = median_filter(seg, size=min(7, n), mode="nearest")
+        w = min(9, n if n % 2 else n - 1)
+        if w >= 3:
+            yy[a:b + 1] = savgol_filter(med, w, 2)
+            vy[a:b + 1] = savgol_filter(seg, w, 2, deriv=1) * FPS
+        else:
+            yy[a:b + 1] = med
+            vy[a:b + 1] = np.gradient(seg) * FPS
+    return yy, vy
+
+
 def kp_mean(d, names):
     """Confidence-gated mean of a left/right keypoint pair -> (x, y) Series in scene px.
 
@@ -235,10 +276,10 @@ for ci, r in enumerate(runs, start=1):
     valid_frac = y.notna().mean()
     kp_present = y.notna().values  # before gap bridging
     track_ok = d.h00.notna().values & kp_present
-    y = y.interpolate(limit=int(0.5 * FPS), limit_area="inside")
-    x = x.interpolate(limit=int(0.5 * FPS), limit_area="inside")
-    ok = y.notna().values
-    yy = y.values.copy()
+    max_bridge = int(round(MAX_BRIDGE_S * FPS))
+    y = bridge_short_gaps(y, max_bridge)
+    x = bridge_short_gaps(x, max_bridge)
+    ok = y.notna().values  # observed, or inside a bridged short gap
     raw_y = pd.Series(bys.values).values  # un-interpolated, for noise measurement
     if ok.sum() < 3 * FPS:
         clip_rows.append({"clip": ci, "start_t": round(t[0], 3), "end_t": round(t[-1], 3),
@@ -249,11 +290,14 @@ for ci, r in enumerate(runs, start=1):
                           "stab_valid_frac": round(stab_valid, 3),
                           "skipped": "too few frames with a tracked bar proxy"})
         continue
-    yy[ok] = medfilt(yy[ok], 7)
-    win = 9 if ok.sum() > 9 else (ok.sum() // 2) * 2 - 1
-    yy[ok] = savgol_filter(yy[ok], win, 2)
-    vy = np.full_like(yy, np.nan)
-    vy[ok] = savgol_filter(y.values[ok], win, 2, deriv=1) * FPS  # px/s, +ve = moving down
+    yy, vy = smooth_segments(y.values, ok)  # vy: px/s, +ve = moving down
+    # unbridged gaps (interior frames with no data) – rep detection still runs across them on
+    # the interpolated trace below, but reps whose movement spans one are flagged
+    gap = ~ok
+    gap_len = np.zeros(len(gap))
+    for a_, b_ in runs_of(gap):
+        if a_ > 0 and b_ < len(gap) - 1:
+            gap_len[a_:b_ + 1] = (b_ - a_ + 1) / FPS
 
     robust = np.nanpercentile(yy, 95) - np.nanpercentile(yy, 5)
     # bottoms = largest y (image y grows downward), tops = smallest y
@@ -445,6 +489,8 @@ for ci, r in enumerate(runs, start=1):
             "track_ok_frac": round(float(track_ok[tb_e:ta_s + 1].mean()), 2),
             "reanchors": int(np.count_nonzero(np.diff(d.ref_id.values[tb_e:ta_s + 1]))),
             "kp_valid_frac": round(float(kp_present[tb_e:ta_s + 1].mean()), 2),
+            # longest unbridged tracking gap during the lowering or effort phase (0 = none)
+            "max_gap_s": round(float(gap_len[tb_e:ta_s + 1].max()), 2),
             # scatter of raw points around the smoothed trace, as a fraction of rep range
             "noise_frac": round(float(np.nanmedian(np.abs(raw_y[tb_s:ta_e + 1] - yy[tb_s:ta_e + 1]))
                                       / rp["range"]), 3),
@@ -452,6 +498,7 @@ for ci, r in enumerate(runs, start=1):
         # good = stabilisation valid, bar proxy seen for at least half the rep, and the raw
         # points hug the smoothed trace (scatter < 5% of the rep's range)
         rec["tracking_quality"] = "good" if (rec["kp_valid_frac"] >= 0.5 and rec["noise_frac"] <= 0.05
+                                             and rec["max_gap_s"] == 0
                                              and float(np.mean(d.h00.notna().values[tb_e:ta_s + 1])) >= 0.9) else "check"
         rep_rows.append(rec)
         if rp["status"] != "ok":

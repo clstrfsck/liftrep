@@ -273,7 +273,8 @@ Use `--offset S` there if the video was rendered from a time range starting at `
 | `range_stab_px` | Rep range of motion (stabilised px) |
 | `first_top_dwell_truncated` | `True` if the top dwell runs into the clip start |
 | `track_ok_frac`, `reanchors`, `kp_valid_frac`, `noise_frac` | Tracking diagnostics (`noise_frac` = scatter of raw points around the smoothed trace ÷ rep range) |
-| `tracking_quality` | `good` if stabilisation is valid for ≥ 90% of the rep, the bar proxy is seen for ≥ 50% of it, and `noise_frac` ≤ 0.05; otherwise `check` |
+| `max_gap_s` | Longest unbridged tracking gap (over 0.5 s) during the lowering or effort phase; 0 if none |
+| `tracking_quality` | `good` if stabilisation is valid for ≥ 90% of the rep, the bar proxy is seen for ≥ 50% of it, `noise_frac` ≤ 0.05, and there is no unbridged gap during the lowering or effort phase (`max_gap_s` = 0); otherwise `check` |
 | `timing_outlier` | Phase(s) far from the clip's median. **Informational only** – a genuinely fatigued, slow rep also appears here |
 
 ### `events.csv` – one row per top / bottom of travel
@@ -326,7 +327,14 @@ then measures the phases and dwells around the top and bottom levels found that 
   the top dwell.
 - **Bottom of travel** – the lowest point between the start of lowering and the end of the
   effort phase. Tops and bottoms are taken only from frames where the bar was actually seen
-  (or bridged over a gap of under 0.5 s), never from values extended past the clip's data.
+  (or bridged over a short gap), never from values extended past the clip's data.
+- **Tracking gaps** – frames where the bar proxy isn't seen (keypoints missing or masked as
+  glitches). Gaps of up to 0.5 s (`MAX_BRIDGE_S`) are bridged by straight-line
+  interpolation; longer gaps are left entirely unfilled. Smoothing and velocity are computed
+  separately for each continuous stretch of data, so no filter or speed measurement spans an
+  unbridged gap. To find reps across a long gap, rep detection still uses a straight line
+  through it; a rep whose lowering or effort phase spans one is marked
+  `tracking_quality = check`, with the gap length in `max_gap_s`.
 - **Dwell** – time the bar stays within 10% of the rep's range of the top or bottom level
   (`DWELL_BAND`).
 - **Lowering (eccentric)** – end of top dwell → start of bottom dwell.
