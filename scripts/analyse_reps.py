@@ -108,7 +108,7 @@ REP_COLS = ["clip", "block", "rep", "rep_status", "lift", "rep_start_t", "rep_en
 EVENT_COLS = ["clip", "rep", "event", "t", "frame", "rec_us", "stab_x", "stab_y", "scene_x",
               "scene_y", "dwell_start_t", "dwell_end_t", "dwell_s"]
 CLIP_COLS = ["clip", "block", "start_t", "end_t", "start_frame", "end_frame", "duration_s", "lift",
-             "tracked", "n_reps", "n_partial", "n_spikes_removed", "n_reps_tracking_good",
+             "tracked", "n_reps", "n_partial", "n_indeterminate", "n_spikes_removed", "n_reps_tracking_good",
              "mean_rep_s", "robust_range_stab_px", "valid_kp_frac", "hip_below_shoulder",
              "box_aspect", "stab_valid_frac", "glitch_frames_masked", "possible_video_change_t",
              "skipped"]
@@ -497,6 +497,10 @@ def analyse_clip(ci, r):
     med_range = np.median([rp["range"] for rp in reps]) if reps else np.nan
     for rp in reps:
         rp["status"] = "partial" if rp["range"] < PARTIAL_RANGE_FRAC * med_range else "ok"
+        # a lowering or effort phase containing an unbridged tracking gap wasn't observed: its
+        # timings are interpolation, so the rep is listed but not counted
+        if rp["status"] == "ok" and gap_len[rp["tb"][1]:rp["ta"][0] + 1].max() > 0:
+            rp["status"] = "indeterminate"
     n_spikes = len(spikes)
 
     n_ok = 0
@@ -561,7 +565,9 @@ def analyse_clip(ci, r):
         "clip": ci, "start_t": round(t[0], 3), "end_t": round(t[-1], 3),
         "start_frame": int(fr[0]), "end_frame": int(fr[-1]),
         "duration_s": round(t[-1] - t[0], 2), "lift": lift, "tracked": "+".join(track),
-        "n_reps": len(ok_reps), "n_partial": len(reps) - len(ok_reps), "n_spikes_removed": n_spikes,
+        "n_reps": len(ok_reps), "n_partial": sum(rp["status"] == "partial" for rp in reps),
+        "n_indeterminate": sum(rp["status"] == "indeterminate" for rp in reps),
+        "n_spikes_removed": n_spikes,
         "mean_rep_s": round(float(np.mean(durs)), 3) if durs else np.nan,
         "robust_range_stab_px": round(float(robust), 1), "valid_kp_frac": round(float(valid_frac), 3),
         "hip_below_shoulder": round(hip_below_sho, 3), "box_aspect": round(aspect, 2),
@@ -610,7 +616,8 @@ def analyse_clip(ci, r):
         ax[1].axvspan(t[rp["bo"][1]], t[rp["ta"][0]], color="C1", alpha=0.25)
     ax[0].invert_yaxis(); ax[0].legend(loc="upper right"); ax[0].set_ylabel("stabilised y px (up = top)")
     ax[0].set_title(f"clip {ci}: {lift}, {len(ok_reps)} reps "
-                    f"(+{len(reps) - len(ok_reps)} partial, hollow), t={t[0]:.1f}-{t[-1]:.1f}s "
+                    f"(+{len(reps) - len(ok_reps)} partial/indeterminate, hollow), "
+                    f"t={t[0]:.1f}-{t[-1]:.1f}s "
                     "(green = top dwell, red = bottom dwell, orange = effort)")
     ax[1].plot(t, -vy, color="C1"); ax[1].axhline(0, color="k", lw=0.5)
     ax[1].set_ylabel("vertical velocity px/s (+ up)"); ax[1].set_xlabel("video time (s)")

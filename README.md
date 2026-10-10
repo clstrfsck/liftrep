@@ -267,8 +267,9 @@ Use `--offset S` there if the video was rendered from a time range starting at `
 | `start_t`, `end_t`, `start_frame`, `end_frame`, `duration_s` | When the athlete was on screen |
 | `lift` | `bench_press` or `squat` |
 | `tracked` | Keypoints used as the bar proxy |
-| `n_reps` | Reps counted (`rep_status = ok`) |
+| `n_reps` | Reps counted (`rep_status = ok`): fully observed reps. Where there are tracking gaps this is a lower bound, since a gap can hide a rep |
 | `n_partial` | Partial reps (not counted) |
+| `n_indeterminate` | Reps whose lowering or effort phase spans an unbridged tracking gap (not counted) |
 | `n_spikes_removed` | Implausibly fast dips discarded as tracking spikes |
 | `n_reps_tracking_good` | Counted reps whose tracking quality is `good` |
 | `mean_rep_s` | Mean duration of counted reps |
@@ -285,7 +286,7 @@ Use `--offset S` there if the video was rendered from a time range starting at `
 | Column | Meaning |
 |---|---|
 | `clip`, `block`, `rep`, `lift` | Identifiers. `rep` is numbered over counted reps only |
-| `rep_status` | `ok` (counted) or `partial` (< 50% of the clip's median range; not counted, no events) |
+| `rep_status` | `ok` (counted); `partial` (< 50% of the clip's median range); or `indeterminate` (the lowering or effort phase spans an unbridged tracking gap, so its timings are interpolated). Only `ok` reps are counted, numbered, and given events, chapters and overlays |
 | `rep_start_t`, `rep_end_t`, `rep_duration_s` | Rep = leave top → arrive back at top |
 | `top_*`, `bottom_*` | Top / bottom of travel: `_t`, `_frame`, `_rec_us`, `_scene_x/y`, `_stab_x/y` |
 | `top_dwell_before_s`, `bottom_dwell_s`, `top_dwell_after_s` | Dwell durations |
@@ -354,9 +355,11 @@ then measures the phases and dwells around the top and bottom levels found that 
   glitches). Gaps of up to 0.5 s (`MAX_BRIDGE_S`) are bridged by straight-line
   interpolation; longer gaps are left entirely unfilled. Smoothing and velocity are computed
   separately for each continuous stretch of data, so no filter or speed measurement spans an
-  unbridged gap. To find reps across a long gap, rep detection still uses a straight line
-  through it; a rep whose lowering or effort phase spans one is marked
-  `tracking_quality = check`, with the gap length in `max_gap_s`.
+  unbridged gap. To locate reps either side of a long gap, rep detection still uses a
+  straight line through it; a rep whose lowering or effort phase spans one is marked
+  `rep_status = indeterminate` (with the gap length in `max_gap_s`) and is not counted,
+  because its timings would be interpolation rather than observation. Counts are therefore
+  lower bounds where there are long gaps.
 - **Dwell** – time the bar stays within 10% of the rep's range of the top or bottom level
   (`DWELL_BAND`).
 - **Lowering (eccentric)** – end of top dwell → start of bottom dwell.
