@@ -17,9 +17,16 @@ one within 2 s after - and flagged in the `video_change` column. They are not us
 clips: fast head movement and the screen leaving the view produce the same signal, so they are
 for review. seg_id identifies the clips; 02analyse_reps.py uses them as its clips.
 
+It also follows the bar's end plate through each clip (plate_tracking.py): a large circle
+centred on the bar, which in a side view stays visible when the plate hides the hands. A
+track is kept only if it moves with the wrists where they are seen.
+
 Writes a copy of the pass-1 per-frame data with the stabilisation columns (h00..h22,
-h_inliers, ref_id, seg_id) replaced: OUT_DIR/frames_restab.csv. Feed that to
-02analyse_reps.py instead of the pass-1 CSVs.
+h_inliers, ref_id, seg_id) replaced, and two additions: the plate (plate_x, plate_y,
+plate_r: scene px, empty where not found) and the screen's tilt (scr_tilt: degrees, from the
+video's horizontal edges; 02analyse_reps.py levels each clip with it):
+OUT_DIR/frames_restab.csv. Feed that to 02analyse_reps.py
+instead of the pass-1 CSVs.
 
 usage: 01restabilise.py VIDEO PASS1_DIR OUT_DIR [--jobs N]
 """
@@ -32,6 +39,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pandas as pd
+from plate_tracking import clip_plate, plate_candidates
 from videoinfo import open_video
 
 MIN_CLIP_S, MAX_GAP_S = 8.0, 1.5      # same clip rule as 02analyse_reps.py
@@ -44,6 +52,8 @@ THUMB_SCALE = 4                       # content comparisons run at 1/4 resolutio
 CONFIRM_S = 2.0                       # a change is confirmed only if no sharp frame within this
                                       # many seconds before it matches one within it after
 H_COLS = [f"h{a}{b}" for a in range(3) for b in range(3)]
+PLATE_COLS = ["plate_x", "plate_y", "plate_r"]
+MAX_TILT = 20.0                       # lines steeper than this aren't the video's horizontal
 
 
 def find_clips(df, fps):
@@ -62,6 +72,33 @@ def find_clips(df, fps):
     if cur:
         runs.append(cur)
     return [(a, b) for a, b in runs if (b - a) / fps >= MIN_CLIP_S]
+
+
+def screen_tilt(g, r):
+    """Tilt (degrees, + = right side lower) of the video's horizontal in this frame: the
+    length-weighted median angle of long, near-horizontal lines in the screen region (the
+    video's and the player's edges, the taskbar, the seek bar, a rack's crossbar). The
+    observer's head roll shows up here; NaN if no such line is found."""
+    x0, y0, x1, y1 = (int(r[k]) for k in ("scr_x0", "scr_y0", "scr_x1", "scr_y1"))
+    w, h = x1 - x0, y1 - y0
+    X0, Y0 = max(0, x0 - int(0.08 * w)), max(0, y0 - int(0.15 * h))
+    X1, Y1 = min(g.shape[1], x1 + int(0.08 * w)), min(g.shape[0], y1 + int(0.15 * h))
+    if X1 - X0 < 20 or Y1 - Y0 < 20:
+        return np.nan
+    edges = cv2.Canny(cv2.GaussianBlur(g[Y0:Y1, X0:X1], (3, 3), 0), 40, 120)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 720, threshold=60, minLineLength=int(0.3 * w),
+                            maxLineGap=8)
+    if lines is None:
+        return np.nan
+    L = lines.reshape(-1, 4).astype(float)
+    ang = (np.degrees(np.arctan2(L[:, 3] - L[:, 1], L[:, 2] - L[:, 0])) + 90) % 180 - 90
+    length = np.hypot(L[:, 2] - L[:, 0], L[:, 3] - L[:, 1])
+    k = np.abs(ang) < MAX_TILT
+    if not k.any():
+        return np.nan
+    o = np.argsort(ang[k])
+    cum = np.cumsum(length[k][o])
+    return float(ang[k][o][np.searchsorted(cum, cum[-1] / 2)])
 
 
 def make_mask(shape, r):
@@ -117,7 +154,7 @@ def process_clip(job):
     rows = rows.set_index("frame")
     cap = cv2.VideoCapture(video)
     cap.set(cv2.CAP_PROP_POS_FRAMES, a)
-    feats, thumbs = {}, {}
+    feats, thumbs, circles, tilts = {}, {}, {}, {}
     for f in range(a, b + 1):
         ok, img = cap.read()
         if not ok:
@@ -129,6 +166,8 @@ def process_clip(job):
         m = make_mask(g.shape, r)
         if m is None:
             continue
+        circles[f] = plate_candidates(g, (r["scr_x0"], r["scr_y0"], r["scr_x1"], r["scr_y1"]))
+        tilts[f] = screen_tilt(g, r)
         kp, des = orb.detectAndCompute(g, m)
         if des is None or len(kp) < 30:
             continue
@@ -143,9 +182,10 @@ def process_clip(job):
     cap.release()
     # every frame of the detected clip belongs to it, registered or not; frames that can't be
     # registered keep an empty transform (02analyse_reps.py treats them as tracking gaps)
-    clip_frames = [{"frame": int(f), "seg_id": clip_idx} for f in rows.index]
+    clip_frames = [{"frame": int(f), "seg_id": clip_idx, "scr_tilt": tilts.get(f, np.nan)}
+                   for f in rows.index]
     if not feats:
-        return clip_frames, []
+        return clip_frames, [], (clip_idx, {"plate": "no registered frames"})
 
     def match(fa, fb, min_inliers=MIN_INLIERS, min_good=25):
         pa, da, ctr, _ = feats[fa]
@@ -246,10 +286,21 @@ def process_clip(job):
     reg = register(fr)
     out = [r for r in clip_frames if r["frame"] not in reg]
     for f, (H, n, kf_id) in reg.items():
-        rec = {"frame": f, "seg_id": clip_idx, "ref_id": clip_idx * 1000 + kf_id, "h_inliers": n}
+        rec = {"frame": f, "seg_id": clip_idx, "ref_id": clip_idx * 1000 + kf_id, "h_inliers": n,
+               "scr_tilt": tilts.get(f, np.nan)}
         rec.update({c: H.ravel()[i] for i, c in enumerate(H_COLS)})
         out.append(rec)
-    return out, [(clip_idx, c) for c in cuts]
+
+    # --- the bar's end plate (see plate_tracking.py), followed in this clip's coordinates
+    frames = list(rows.index)
+    plate, info = clip_plate([circles.get(f, np.empty((0, 3))) for f in frames],
+                             [reg[f][0] if f in reg else None for f in frames], rows)
+    if plate is not None:
+        found = dict(zip(frames, plate, strict=True))
+        for rec in out:
+            if np.isfinite(found[rec["frame"]][0]):
+                rec.update(zip(PLATE_COLS, found[rec["frame"]], strict=True))
+    return out, [(clip_idx, c) for c in cuts], (clip_idx, info)
 
 
 if __name__ == "__main__":
@@ -279,22 +330,28 @@ if __name__ == "__main__":
     clips = find_clips(df, fps)
     print(f"{len(clips)} clips, {sum(b - a + 1 for a, b in clips)} frames, {args.jobs} jobs", flush=True)
 
-    cols = ["frame", "scr_x0", "scr_y0", "scr_x1", "scr_y1", "p_x0", "p_y0", "p_x1", "p_y1"]
+    cols = ["frame", "scr_x0", "scr_y0", "scr_x1", "scr_y1", "p_x0", "p_y0", "p_x1", "p_y1",
+            "l_wri_x", "l_wri_y", "l_wri_c", "r_wri_x", "r_wri_y", "r_wri_c"]
     dfi = df.set_index("frame", drop=False)
     jobs = [(args.video, i, a, b, dfi.loc[a:b, cols].reset_index(drop=True), fps)
             for i, (a, b) in enumerate(clips, start=1)]
     jobs.sort(key=lambda j: -(j[3] - j[2]))  # longest first, for better load balance
-    tic, results, all_cuts = time.time(), [], []
+    tic, results, all_cuts, plates = time.time(), [], [], []
     with Pool(args.jobs) as pool:
-        for k, (res, cuts) in enumerate(pool.imap_unordered(process_clip, jobs), start=1):
+        for k, (res, cuts, plate) in enumerate(pool.imap_unordered(process_clip, jobs), start=1):
             results += res
             all_cuts += cuts
+            plates.append(plate)
             print(f"  {k}/{len(jobs)} clips done ({time.time() - tic:.0f}s)", flush=True)
     print(f"{len(all_cuts)} possible video change(s) inside clips (flagged for review, not split)",
           flush=True)
+    print("plate tracks (used for bench press by 02analyse_reps.py):")
+    for ci, info in sorted(plates):
+        detail = ", ".join(f"{k} {v:.2f}" for k, v in info.items() if isinstance(v, float))
+        print(f"  clip {ci}: {info['plate']}{f' ({detail})' if detail else ''}", flush=True)
 
     out = df.set_index("frame", drop=False)
-    for c in H_COLS + ["h_inliers", "ref_id", "seg_id"]:
+    for c in H_COLS + ["h_inliers", "ref_id", "seg_id", "scr_tilt"] + PLATE_COLS:
         out[c] = np.nan
     if results:
         new = pd.DataFrame(results).set_index("frame")

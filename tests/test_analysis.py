@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 import pytest
-from conftest import FPS, analyse, bar_trace, run_script, session_frames
+from conftest import FPS, H_COLS, analyse, bar_trace, run_script, session_frames
 
 
 def read(out, name):
@@ -151,3 +151,92 @@ def test_edge_gaps_count_as_unbridged_time(tmp_path):
     clip = read(out, "clips.csv").iloc[0]
     assert clip.unbridged_gap_s == pytest.approx(1.0, abs=0.05)
     assert clip.n_reps == 6
+
+
+def tilted(frames, deg, cx=900.0, cy=550.0):
+    """The same session seen with the observer's head rolled by deg (right side lower): every
+    keypoint, box and screen point rotated about (cx, cy), and scr_tilt recording the roll."""
+    frames = frames.copy()
+    c, s = np.cos(np.radians(deg)), np.sin(np.radians(deg))
+    for x in [col[:-2] for col in frames.columns if col.endswith("_x")]:
+        if f"{x}_y" in frames:
+            dx, dy = frames[f"{x}_x"] - cx, frames[f"{x}_y"] - cy
+            frames[f"{x}_x"], frames[f"{x}_y"] = cx + c * dx - s * dy, cy + s * dx + c * dy
+    frames["scr_tilt"] = deg
+    return frames
+
+
+def test_tilted_head_is_levelled(tmp_path):
+    # wide grip (wrists 300 px apart): with an 8 degree roll the pair is 42 px apart in height,
+    # more than the misdetection threshold, unless heights are compared in levelled coordinates
+    y = bar_trace(n_reps=6)
+    frames = session_frames(y)
+    frames["l_wri_x"], frames["r_wri_x"] = 750.0, 1050.0
+    _, out = analyse(tmp_path, tilted(frames, 8.0))
+    clip = read(out, "clips.csv").iloc[0]
+    reps = read(out, "reps.csv")
+    assert clip.screen_tilt_deg == pytest.approx(8.0, abs=0.2)
+    assert clip.n_reps == 6 and (reps.tracking_quality == "good").all()
+    # the bar's full vertical travel, measured along the video's vertical
+    assert np.allclose(reps.range_stab_px, 100, atol=4)
+    # the stabilising transform maps the video's horizontal (8 degrees in the scene) to level
+    fa = pd.read_csv(out / "frames_annotation.csv.gz").iloc[0]
+    H = fa[H_COLS].to_numpy(float).reshape(3, 3)
+    a, b = H @ [900, 550, 1], H @ [900 + np.cos(np.radians(8)) * 100, 550 + np.sin(np.radians(8)) * 100, 1]
+    assert abs(b[1] / b[2] - a[1] / a[2]) < 1.0
+
+
+def test_without_scr_tilt_nothing_is_levelled(tmp_path):
+    _, out = analyse(tmp_path, session_frames(bar_trace()))
+    assert read(out, "clips.csv").loc[0, "screen_tilt_deg"] == 0
+
+
+def front_view_wrists(frames, y, seed=0):
+    """Wrists as the pose model sees an athlete facing the camera: the hands 300 px apart and
+    the right-hand one 25 px lower in the picture, left/right labels swapped in random
+    frames, and one side missing in one frame in five."""
+    rng = np.random.default_rng(seed)
+    n = len(frames)
+    swap = rng.random(n) < 0.5
+    xl, yl, xr, yr = 750.0, y - 12.5, 1050.0, y + 12.5
+    frames["l_wri_x"], frames["l_wri_y"] = np.where(swap, xr, xl), np.where(swap, yr, yl)
+    frames["r_wri_x"], frames["r_wri_y"] = np.where(swap, xl, xr), np.where(swap, yl, yr)
+    gone = rng.random(n) < 0.2
+    side = rng.random(n) < 0.5
+    frames.loc[gone & side, "l_wri_c"] = 0.0
+    frames.loc[gone & ~side, "r_wri_c"] = 0.0
+    return frames
+
+
+def test_front_view_wrist_pair_gives_a_steady_bar(tmp_path):
+    y = bar_trace(n_reps=6)
+    (tmp_path / "clean").mkdir()
+    (tmp_path / "front").mkdir()
+    _, clean = analyse(tmp_path / "clean", session_frames(y))
+    _, out = analyse(tmp_path / "front", front_view_wrists(session_frames(y), y))
+    fa = pd.read_csv(out / "frames_annotation.csv.gz")
+    ref = pd.read_csv(clean / "frames_annotation.csv.gz")
+    # the bar's height is the pair's centre in every frame, whichever hands were seen: the
+    # same trace as from a clean pair of wrists
+    assert np.nanmax(np.abs(fa.bar_stab_y - ref.bar_stab_y)) < 1
+    clip = read(out, "clips.csv").iloc[0]
+    assert clip.n_reps == 6 and clip.n_reps_tracking_good == 6
+
+
+def test_brief_misdetection_at_the_bottom_is_removed(tmp_path):
+    # both wrists placed 150 px too low for 4 frames at each rep's bottom (on the elbows)
+    y = bar_trace(n_reps=6)
+    wr = y.copy()
+    for b in np.flatnonzero((y == y.max()) & (np.r_[0, np.diff(y)] > 0)):
+        wr[b:b + 4] += 150
+    _, out = analyse(tmp_path, session_frames(wr))
+    reps = read(out, "reps.csv")
+    assert (reps.rep_status == "ok").sum() == 6
+    assert np.allclose(reps.bottom_stab_y, 500, atol=5)
+
+
+def test_fast_real_rep_is_not_a_glitch(tmp_path):
+    # a quick rep (0.3 s down, 0.25 s up): fast, but no single-frame jump
+    _, out = analyse(tmp_path, session_frames(bar_trace(n_reps=6, lower_s=0.3, lift_s=0.25, bottom_s=0.08)))
+    clip = read(out, "clips.csv").iloc[0]
+    assert clip.n_reps == 6 and clip.glitch_frames_masked == 0

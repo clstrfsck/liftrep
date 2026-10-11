@@ -109,7 +109,7 @@ The pipeline scripts are numbered in the order they run. Run them from the proje
 | Script | Pass | Time (51-min video) |
 |---|---|---|
 | `scripts/00run_extract_all.py` | 1 and 1b: pose extraction, then re-stabilisation | ≈ 1.5 h + 6 min |
-| `scripts/01restabilise.py` | 1b: re-stabilisation (run by `00`; can be run alone) | ≈ 6 min (CPU) |
+| `scripts/01restabilise.py` | 1b: re-stabilisation and plate tracking (run by `00`; can be run alone) | ≈ 8 min (CPU) |
 | `scripts/02analyse_reps.py` | 2: rep analysis | seconds (CPU) |
 | `scripts/03annotate_video.py` | 3: annotated video with chapters (optional) | ≈ 5 min |
 
@@ -150,7 +150,9 @@ default 960).
 .venv/bin/python scripts/01restabilise.py "<video>.mp4" work work/restab
 ```
 
-Needed only after `--no-restabilise`, or after re-running pass 1 for part of the video. Reads
+Needed only after `--no-restabilise`, after re-running pass 1 for part of the video, or to
+add plate tracking to results made before it existed (pass 2 then falls back to the wrists
+for every bench press clip). Reads
 the pass-1 CSVs in `work/` and writes `work/restab/frames_restab.csv`. Option: `--jobs N`
 (default: CPU cores − 2, at most 8).
 
@@ -195,7 +197,7 @@ What is drawn in each lift clip:
 | Red line, `BOTTOM` + `dwell` | Bottom of travel, with the bottom dwell time |
 | Orange arrow, `raising` | Effort (lifting) phase from bottom to top, with its duration |
 | Blue arrow, `lowering` | Lowering phase, with its duration |
-| Dot | Bar proxy (wrists or shoulders); orange while lifting |
+| Dot | Bar proxy (plate centre or wrists for bench press, shoulders for squat); orange while lifting |
 | Panel, top left | Clip number and lift, `Rep k of N`, last rep's duration, current phase |
 
 Times count up while a phase is in progress and otherwise show the last completed value; the
@@ -246,14 +248,16 @@ set of columns, even for a video with no lift clips.
 | `clip` | Clip number, in playing order |
 | `block` | Block number: a run of consecutive clips of the same lift |
 | `start_t`, `end_t`, `start_frame`, `end_frame`, `duration_s` | When the athlete was on screen |
-| `lift`, `tracked` | `bench_press` or `squat`, and the keypoints used as the bar proxy |
+| `lift`, `tracked` | `bench_press` or `squat`, and the bar proxy: `plate`, or the keypoints used (`l_wri+r_wri`, `l_sho+r_sho`) |
 | `n_reps` | Counted (fully observed) reps. A lower bound where there are tracking gaps, since a rep can hide in one |
 | `n_partial`, `n_indeterminate` | Reps listed but not counted (see `rep_status`) |
 | `n_reps_tracking_good` | Counted reps with `tracking_quality = good` |
 | `mean_rep_s` | Mean duration of counted reps |
 | `n_spikes_removed` | Implausibly fast dips discarded as tracking spikes |
 | `robust_range_stab_px` | Typical vertical movement range in the clip (stabilised px) |
-| `valid_kp_frac` | Fraction of frames with a confident bar-proxy keypoint |
+| `valid_kp_frac` | Fraction of frames with a confident bar-proxy keypoint (or plate) |
+| `screen_tilt_deg` | The clip's tilt (degrees, + = right side lower) rotated out of its stabilised coordinates, from the screen's horizontal edges (0 if pass 1b didn't measure it) |
+| `plate_frac` | Fraction of registered frames with a validated plate track from pass 1b (0 if none); bench press follows the plate when this is at least 0.5 |
 | `stab_valid_frac` | Fraction of frames with a valid stabilising transform |
 | `glitch_frames_masked` | Frames masked as stabilisation glitches |
 | `unbridged_gap_s` | Seconds without an observed (or briefly bridged) bar position, including at the clip's start and end; where this is large, `n_reps` may undercount |
@@ -306,7 +310,8 @@ the screen with the athlete masked out. These transforms are chained from frame 
 one bad link (motion blur, a glance away) would corrupt every later frame; pass 1b replaces
 them.
 
-**Pass 1b – re-stabilisation** (`01restabilise.py`; required, and run automatically).
+**Pass 1b – re-stabilisation and plate tracking** (`01restabilise.py`; required, and run
+automatically).
 
 - Finds the lift clips: runs of athlete detections with gaps under 1.5 s. These are the clips
   used from here on; every frame of a clip carries its clip ID, even if it can't be registered.
@@ -322,6 +327,21 @@ them.
   if no sharp frame within 2 s before it matches one within 2 s after. Flags are not used to
   split clips, because fast head movement and the screen leaving the view look the same.
 - Seeds its random sampling (RANSAC) per clip, so re-runs give identical results.
+- Follows the bar's end plate (`plate_tracking.py`), for bench press seen from the side,
+  where the plate hides the hands. Circles are found in each frame's screen region (Hough
+  transform). The circles found at the wrists (the hands hold the bar at the plate's centre)
+  give the plate's size and position in the clip's stabilised coordinates, and a
+  shortest-path search picks one circle per frame: close to that size and position, near
+  the wrists where they are seen, and moving plausibly from frame to frame. It may skip up
+  to 0.5 s where the plate isn't found, but can't jump to another circle (such as a plate
+  stored on the rack) without a penalty. The track is kept only if the wrists, where seen,
+  sit at or just below the plate's centre and move with it (spread of their height
+  difference under 0.3 radii). In a front view the plate is edge-on and no track passes.
+  Written as `plate_x`, `plate_y`, `plate_r` (scene px).
+- Measures the screen's tilt in every frame (`scr_tilt`, degrees): the length-weighted median
+  angle of long, near-horizontal lines in the screen region, such as the video's and the
+  player's edges, the taskbar and the seek bar, which are all horizontal in the video. The
+  observer's head roll shows up here.
 
 **Pass 2 – rep analysis** (`02analyse_reps.py`).
 
@@ -329,10 +349,24 @@ them.
   less than half their frames registered are skipped (`MIN_REGISTERED_FRAC`).
 - Re-bases each clip's transforms on a frame inside it and rejects frames whose transform is
   implausible (scale, position, rotation or shear at the athlete).
+- Levels each clip: its stabilised coordinates are those of one of its frames, so if the
+  observer's head was tilted there, "up" would be tilted too. The clip's median screen tilt,
+  mapped into its coordinates, is rotated out (`screen_tilt_deg`), so heights are measured
+  along the video's vertical and the annotated video's lines follow the video.
 - Classifies the lift: in a **squat** the athlete is upright, so the hips sit well below the
   shoulders (relative to body height); on a **bench press** they are level.
-- Follows a bar proxy: the **wrists** for bench press, the **shoulders** for squat (bar on the
-  upper back).
+- Follows a bar proxy: for bench press the **plate** where pass 1b has a validated track for
+  at least half the clip's registered frames (`MIN_PLATE_FRAC`; in practice the side views),
+  otherwise the **wrists**; the **shoulders** for squat (bar on the upper back).
+- Combines the left and right keypoints into one bar position, in levelled coordinates.
+  They are assigned to the left-most and right-most hand by position (the pose model's
+  left/right labels swap when the athlete faces the camera); each hand's misdetections are
+  dropped against its own running median; the pair's usual height difference is tracked
+  over 2 s (`PAIR_OFFSET_S`), so either hand alone, corrected by half of it, gives the
+  pair's centre. With both hands seen their mean is used, unless they disagree by more than
+  15% of the athlete's height beyond their usual difference (`PAIR_DISAGREE_FRAC`); then
+  the hand nearer the previous position is used. The position no longer flips between
+  "both hands" and "one hand".
 - Finds the reps and their phases (below), and writes the outputs and QA plots.
 
 **Pass 3 – annotated video** (`03annotate_video.py`, optional): draws the results onto the
@@ -377,7 +411,10 @@ thresholds below are constants at the top of `scripts/02analyse_reps.py`.
   head movement and motion blur): a body part that should be still (hips and knees in a bench
   press, ankles in a squat) moves more than 12% of body height from its local median
   (`REF_DEV_FRAC`), or is missing while the head moves fast (`HEAD_FAST_PX`), or the bar jumps
-  more than 35% of body height in one frame (`BAR_JUMP_FRAC`).
+  more than 35% of body height in one frame (`BAR_JUMP_FRAC`). If such a jump comes back to
+  about where it left within 0.4 s (`EXCURSION_S`), the whole excursion is masked: a
+  misdetection lasting a few frames, such as the wrists placed on the elbows at the bottom
+  of a front-view bench press.
 - **Tracking spike** – a "rep" whose lowering takes under 0.2 s (`MIN_ECCENTRIC_S`), lifting
   under 0.12 s (`MIN_EFFORT_S`), or that moves over 3× faster than the clip's typical rep
   (`MAX_SPEED_RATIO`). It is bridged over and the neighbouring reps rebuilt without it.
@@ -397,18 +434,28 @@ range against the minimum.
 - **Paused playback** by the operator: head movement during a pause can create false reps, and
   a pause at the top lengthens the top dwell. These often show up as `timing_outlier`; check
   the QA plot.
+- **A clip can be a video that was never played**: the athlete is on screen (the player
+  paused on the first frame), so it is analysed, and the observer's movement can then
+  produce a few short, false reps. This can't be told apart automatically from a sparse,
+  real clip; check clips with few, fast reps against the video.
 - **Clips are numbered in playing order**, not by condition; replayed or scrubbed clips can
   appear as extra or split clips. Blocks are numbered, not named: mapping clips and blocks to
   athletes and loads has to come from the study protocol.
 - **Back-to-back videos may form one clip** if the next video starts within 1.5 s; rep
   numbering and per-clip thresholds then span both. Check the `possible_video_change_t` times
   against the video.
-- **Pose errors**: a wrist sometimes snaps onto the bench or taskbar (the analysis keeps the
-  wrist nearest its previous position), and motion blur adds noise. Such reps are marked
-  `tracking_quality = check`.
-- **Side-view bench press with heavy plates**: the plate hides the hands, so wrist keypoints
-  are often missing or misplaced and many reps are marked `check`. Tracking the plate itself
-  would be more reliable.
+- **Pose errors**: a wrist sometimes snaps onto the bench, the knees or the taskbar, and
+  motion blur adds noise. In front views the pose model's left/right labels swap from frame
+  to frame, and at the bottom of fast reps both wrists can be placed too low for a few
+  frames. Brief errors are dropped (see the bar position and glitch frames above); what
+  remains shows as scatter, so many front-view bench press reps are marked
+  `tracking_quality = check` (their ranges are small, ~40–70 px, so the 5% scatter limit is
+  strict).
+- **Plate tracking** needs the plate to be seen as a circle (a side view) and the wrists to
+  be seen often enough to validate the track. Where it isn't used (front views, or no
+  validated track), bench press falls back to the wrists, which a heavy plate can hide.
+  The plate's centre is the bar's end, a few centimetres from the wrists, so bench press
+  positions and ranges from the plate and from the wrists aren't directly comparable.
 
 ## Other scripts
 
@@ -419,7 +466,7 @@ range against the minimum.
 | `scripts/screen_probe.py VIDEO OUT_DIR T1 T2 …` | Diagnostic: the detected screen region at given times |
 | `scripts/pose_probe.py VIDEO T0 T1 MODEL OUT_PREFIX [DEVICE]` | Diagnostic: pose speed and detections in a time window (`DEVICE` defaults to `auto`) |
 | `scripts/plot_test.py FRAMES.csv OUT.png` | Diagnostic: raw vs stabilised wrist trace and tracking diagnostics |
-| `scripts/device.py`, `videoinfo.py`, `signal_utils.py` | Shared helpers, imported by the other scripts: device choice; opening and checking videos; gap bridging and smoothing |
+| `scripts/device.py`, `videoinfo.py`, `signal_utils.py`, `plate_tracking.py` | Shared helpers, imported by the other scripts: device choice; opening and checking videos; gap bridging and smoothing; finding and following the plate |
 
 Scripts that other scripts import aren't numbered, because Python can't import a module whose
 name starts with a digit.
@@ -433,12 +480,16 @@ ruff check scripts tests                                 # lint (rules pinned in
 ```
 
 The tests (in `tests/`; `pytest.ini` limits discovery to that folder) need no real recording
-or GPU. They cover the signal helpers; end-to-end runs of pass 2 on synthetic sessions with
-known answers (rep counts, phase timings, lift classification, set-up, short and long gaps,
-indeterminate reps, clips with unregistered edges, empty sessions); and the scripts' safety
+or GPU. They cover the signal helpers; plate tracking (finding a drawn plate, ignoring a
+stored plate, rejecting a circle that doesn't move with the hands); end-to-end runs of pass 2
+on synthetic sessions with known answers (rep counts, phase timings, lift classification,
+set-up, short and long gaps, indeterminate reps, clips with unregistered edges, empty
+sessions, following the plate or falling back to the wrists, levelling a tilted view, a front view's
+swapped and missing wrists, brief misdetections at a rep's bottom, fast reps that must not
+be masked); and the scripts' safety
 checks (refusing raw pass-1 data; never overwriting or deleting the source video, including
 through hard links; stale files; invalid `--jobs`; unreadable or undecodable videos). Passes 1
-and 1b need real footage and aren't covered. Without ffmpeg, one test is skipped.
+and 1b as a whole need real footage and aren't covered. Without ffmpeg, one test is skipped.
 
 ## Licence
 

@@ -50,12 +50,22 @@ REF_DEV_FRAC = 0.12       # stationary body reference this far (x body height) f
                           # local median = stabilisation glitch in that frame
 HEAD_FAST_PX = 12.0       # observer head speed (scene px/frame) treated as fast
 BAR_JUMP_FRAC = 0.35      # bar moving more than 35% of body height in one frame = glitch
+EXCURSION_S = 0.4         # ... and such a jump that comes back to the same level within this
+                          # long marks the whole excursion as a glitch (a misdetection lasting
+                          # a few frames, e.g. wrists placed on the elbows at the bottom)
 MIN_REP_RANGE_FRAC = 0.4  # a rep must travel >= 40% of the clip's robust range
 MIN_ECCENTRIC_S = 0.2     # faster lowering than this is a tracking spike, not a rep
 MIN_EFFORT_S = 0.12       # ... likewise for the effort (lifting) phase (3 frames)
 PARTIAL_RANGE_FRAC = 0.5  # reps with < 50% of the clip's median range are partial
 DEBUG_CLIP = int(os.environ.get("ANALYSE_DEBUG_CLIP", "0"))  # print rep candidates for one clip
 MAX_SPEED_RATIO = 3.0     # a rep moving > 3x faster than the clip's typical rep is a glitch
+MIN_PLATE_FRAC = 0.5      # bench press: follow the plate (pass 1b) instead of the wrists when
+                          # it was found in at least half the clip's registered frames
+HAND_OUTLIER_FRAC = 0.1   # a wrist/shoulder this far (x person height) from its own running
+                          # median is a misdetection in that frame
+PAIR_DISAGREE_FRAC = 0.15 # the two sides disagreeing by more than this beyond their usual
+                          # height difference: one of them is wrong
+PAIR_OFFSET_S = 2.0       # window for the pair's usual height difference
 
 out_dir = Path(sys.argv[1])
 (out_dir / "plots").mkdir(parents=True, exist_ok=True)
@@ -113,7 +123,8 @@ EVENT_COLS = ["clip", "rep", "event", "t", "frame", "rec_us", "stab_x", "stab_y"
               "scene_y", "dwell_start_t", "dwell_end_t", "dwell_s"]
 CLIP_COLS = ["clip", "block", "start_t", "end_t", "start_frame", "end_frame", "duration_s", "lift",
              "tracked", "n_reps", "n_partial", "n_indeterminate", "n_spikes_removed", "n_reps_tracking_good",
-             "mean_rep_s", "robust_range_stab_px", "valid_kp_frac", "hip_below_shoulder",
+             "mean_rep_s", "robust_range_stab_px", "valid_kp_frac", "plate_frac", "screen_tilt_deg",
+             "hip_below_shoulder",
              "box_aspect", "stab_valid_frac", "glitch_frames_masked", "unbridged_gap_s",
              "possible_video_change_t", "skipped"]
 FRAME_COLS = ["frame", "t", "clip", "rep", "n_reps", "phase", "bar_stab_x", "bar_stab_y",
@@ -177,16 +188,48 @@ def rebase(d):
     return d, float(np.mean(good))
 
 
+def level(d):
+    """Rotate a clip's stabilised coordinates so the video's horizontal is level.
+
+    Each clip is stabilised onto one of its own frames, so if the observer's head was
+    tilted in that frame, "up" in the clip is tilted too: the bar's vertical movement is
+    measured at an angle and lines drawn level don't follow the video. pass 1b measures the
+    screen's tilt in every frame (scr_tilt, from the video's horizontal edges); mapped into
+    the clip's coordinates, its median is the clip's tilt, which is rotated out here.
+    Returns (d, tilt in degrees); data without scr_tilt is left as it is.
+    """
+    if "scr_tilt" not in d:
+        return d, 0.0
+    ok = d.h00.notna() & d.scr_tilt.notna() & d.scr_x0.notna()
+    if ok.sum() < 10:
+        return d, 0.0
+    e = d[ok]
+    cx, cy = (e.scr_x0 + e.scr_x1) / 2, (e.scr_y0 + e.scr_y1) / 2
+    th = np.radians(e.scr_tilt)
+    ax, ay = stabilise(e, cx, cy)
+    bx_, by_ = stabilise(e, cx + 100 * np.cos(th), cy + 100 * np.sin(th))
+    tilt = float(np.degrees(np.nanmedian(np.arctan2(by_ - ay, bx_ - ax))))
+    # rotate by -tilt about the screen's centre (in clip coordinates)
+    px, py = float(np.nanmedian(ax)), float(np.nanmedian(ay))
+    c, s_ = np.cos(np.radians(-tilt)), np.sin(np.radians(-tilt))
+    R = np.array([[c, -s_, px - c * px + s_ * py], [s_, c, py - s_ * px - c * py], [0, 0, 1]])
+    Hs = d[H_COLS].values.reshape(-1, 3, 3)
+    d = d.copy()
+    d[H_COLS] = (R @ Hs).reshape(-1, 9)  # NaN transforms stay NaN
+    return d, tilt
+
+
 def kp_mean(d, names):
     """Confidence-gated mean of a left/right keypoint pair -> (x, y) Series in scene px.
 
     When both sides are confident but at very different heights (one is a misdetection,
     e.g. a wrist snapped onto the bench), keep the side closest to the previous accepted
-    position.
+    position. The scale is the clip's typical person height (the person box's height varies
+    from frame to frame). Used for the lift classification; the bar proxy uses pair_track().
     """
     xs = np.stack([d[f"{n}_x"].where(d[f"{n}_c"] >= KP_MIN_CONF).values for n in names], 1)
     ys = np.stack([d[f"{n}_y"].where(d[f"{n}_c"] >= KP_MIN_CONF).values for n in names], 1)
-    scale = (d.p_y1 - d.p_y0).values  # person box height, scene px
+    scale = np.full(len(d), np.nanmedian((d.p_y1 - d.p_y0).values))  # person height, scene px
     ox, oy = np.full(len(d), np.nan), np.full(len(d), np.nan)
     last = None
     for i in range(len(d)):
@@ -203,6 +246,123 @@ def kp_mean(d, names):
         else:
             ox[i], oy[i] = np.nanmean(xs[i]), np.nanmean(ys[i])
         last = (ox[i], oy[i])
+    return pd.Series(ox, index=d.index), pd.Series(oy, index=d.index)
+
+
+def excursions(y, jump, max_len):
+    """Frames of y that are glitches. Missing samples are skipped.
+
+    * a jump of more than `jump` between observed samples at most 3 frames apart (across a
+      longer gap the bar may really have moved that far)
+    * an excursion: a jump of more than `jump` that comes back, by an opposite jump within
+      max_len samples, to within `jump` of where it left (the bar may really have moved a
+      little meanwhile); every sample in between is a glitch (a misdetection lasting a few
+      frames, often next to missing frames). A real bar can't leave and return that fast.
+    """
+    idx = np.flatnonzero(np.isfinite(y))
+    v = y[idx]
+    out = np.zeros(len(y), bool)
+    dv = np.diff(v)
+    big = np.flatnonzero(np.abs(dv) > jump)  # jump between v[k] and v[k + 1]
+    out[idx[big[np.diff(idx)[big] <= 3] + 1]] = True
+    for k in big:
+        for m in big[(big > k) & (big <= k + max_len)]:
+            if np.sign(dv[m]) != np.sign(dv[k]) and abs(v[m + 1] - v[k]) < jump:
+                out[idx[k + 1:m + 1]] = True
+                break
+    return out
+
+
+def pair_track(d, names):
+    """The bar's position from a left/right keypoint pair (wrists or shoulders), as (x, y)
+    Series in scene px; d's transforms must be levelled (see level()).
+
+    The pose model's keypoints are noisy, and when the athlete faces the camera its left/right
+    labels swap from frame to frame; one side can also be missing or misplaced. Switching
+    between the pair's mean and a single side makes the trace jump by half the distance
+    between them, so instead, in the clip's levelled coordinates:
+
+      * the points are assigned to the left-most and right-most hand by position, not label
+      * each hand's misdetections are dropped against that hand's own running median
+      * the pair's usual difference in position (a running median over PAIR_OFFSET_S) is
+        tracked, so either hand alone, corrected by half of it, gives the pair's centre
+      * with both hands seen, their mean is used; if they disagree by more than
+        PAIR_DISAGREE_FRAC beyond their usual difference, the hand whose estimate is nearer
+        the previous position is used
+
+    Unregistered frames (no transform) get the plain mean of the confident points.
+    """
+    n = len(d)
+    scale = float(np.nanmedian((d.p_y1 - d.p_y0).values))  # typical person height, px
+    sx, sy = np.full((n, 2), np.nan), np.full((n, 2), np.nan)  # scene
+    lx, ly = np.full((n, 2), np.nan), np.full((n, 2), np.nan)  # levelled
+    for k, name in enumerate(names):
+        okc = d[f"{name}_c"] >= KP_MIN_CONF
+        sx[:, k], sy[:, k] = d[f"{name}_x"].where(okc).values, d[f"{name}_y"].where(okc).values
+        a_, b_ = stabilise(d, pd.Series(sx[:, k], index=d.index), pd.Series(sy[:, k], index=d.index))
+        lx[:, k], ly[:, k] = a_.values, b_.values
+    # hands by position: column 0 = left-most, 1 = right-most
+    seen = np.isfinite(lx)
+    both = seen.all(axis=1)
+    hx, hy = np.full((n, 2), np.nan), np.full((n, 2), np.nan)
+    swap = both & (lx[:, 0] > lx[:, 1])
+    hx[both] = np.where(swap[both, None], lx[both][:, ::-1], lx[both])
+    hy[both] = np.where(swap[both, None], ly[both][:, ::-1], ly[both])
+    one = seen.any(axis=1) & ~both
+    if one.any():
+        k = np.argmax(seen[one], axis=1)
+        x1, y1 = lx[one, k], ly[one, k]
+        if both.sum() >= 10:  # the nearer hand's usual position
+            xl, xr = np.nanmedian(hx[both, 0]), np.nanmedian(hx[both, 1])
+            side = (np.abs(x1 - xr) < np.abs(x1 - xl)).astype(int)
+        else:
+            side = np.zeros(len(x1), int)
+        idx = np.flatnonzero(one)
+        hx[idx, side], hy[idx, side] = x1, y1
+    # each hand's misdetections, against its own running median
+    for k in range(2):
+        med = pd.Series(hy[:, k]).rolling(7, center=True, min_periods=3).median().values
+        bad = np.abs(hy[:, k] - med) > HAND_OUTLIER_FRAC * scale
+        hx[bad, k], hy[bad, k] = np.nan, np.nan
+    # the pair's usual difference (right-most minus left-most), as a running median
+    win = int(PAIR_OFFSET_S * FPS) | 1
+    pair = np.isfinite(hy).all(axis=1)
+    offs = []
+    for v in (hx, hy):
+        dv = pd.Series(np.where(pair, v[:, 1] - v[:, 0], np.nan))
+        o = dv.rolling(win, center=True, min_periods=5).median().interpolate(limit_direction="both")
+        offs.append(o.fillna(dv.median()).fillna(0.0).values)
+    offx, offy = offs
+    # each hand's estimate of the pair's centre, then combine
+    ex = np.c_[hx[:, 0] + offx / 2, hx[:, 1] - offx / 2]
+    ey = np.c_[hy[:, 0] + offy / 2, hy[:, 1] - offy / 2]
+    cx, cy = np.full(n, np.nan), np.full(n, np.nan)
+    prev = None
+    for i in range(n):
+        ok = np.isfinite(ey[i])
+        if not ok.any():
+            continue
+        if ok.all():
+            if abs(ey[i, 0] - ey[i, 1]) > PAIR_DISAGREE_FRAC * scale and prev is not None:
+                k = int(np.argmin(np.abs(ey[i] - prev)))
+                cx[i], cy[i] = ex[i, k], ey[i, k]
+            else:
+                cx[i], cy[i] = ex[i].mean(), ey[i].mean()
+        else:
+            k = int(np.argmax(ok))
+            cx[i], cy[i] = ex[i, k], ey[i, k]
+        prev = cy[i]
+    # back to scene px (stabilise() then gives the levelled position again)
+    cnt = np.isfinite(sx).sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):  # unregistered frames: plain mean
+        ox, oy = np.nansum(sx, axis=1) / cnt, np.nansum(sy, axis=1) / cnt
+    Hs = d[H_COLS].values.reshape(-1, 3, 3)
+    ok = np.isfinite(Hs).all(axis=(1, 2)) & np.isfinite(cy)
+    if ok.any():
+        q = np.einsum("nij,nj->ni", np.linalg.inv(Hs[ok]), np.c_[cx[ok], cy[ok], np.ones(ok.sum())])
+        ox[ok], oy[ok] = q[:, 0] / q[:, 2], q[:, 1] / q[:, 2]
+    dropped = np.isfinite(Hs).all(axis=(1, 2)) & ~np.isfinite(cy)  # registered, rejected
+    ox[dropped], oy[dropped] = np.nan, np.nan
     return pd.Series(ox, index=d.index), pd.Series(oy, index=d.index)
 
 
@@ -227,6 +387,7 @@ def analyse_clip(ci, r):
     t = d.t.values
 
     d, stab_valid = rebase(d)
+    d, tilt = level(d)
     if stab_valid < MIN_REGISTERED_FRAC:
         clip_rows.append({"clip": ci, "start_t": round(t[0], 3), "end_t": round(t[-1], 3),
                           "start_frame": int(d.frame.values[0]), "end_frame": int(d.frame.values[-1]),
@@ -246,9 +407,18 @@ def analyse_clip(ci, r):
         lift = "squat" if hip_below_sho > 0.2 else "bench_press"
     else:
         lift = "squat" if aspect > 1.45 else "bench_press"
-    # bar proxy: hands for bench press, shoulders (bar on upper back) for squat
-    track = ["l_wri", "r_wri"] if lift == "bench_press" else ["l_sho", "r_sho"]
-    bx, by = kp_mean(d, track)
+    # bar proxy: hands for bench press, shoulders (bar on upper back) for squat. In a side
+    # view the plate hides the hands, so a bench press follows the plate where pass 1b found
+    # (and validated) a track for most of the clip: it is centred on the bar.
+    registered = d.h00.notna()
+    plate_frac = (float(d.plate_x[registered].notna().mean())
+                  if "plate_x" in d and registered.any() else 0.0)
+    if lift == "bench_press" and plate_frac >= MIN_PLATE_FRAC:
+        track = ["plate"]
+        bx, by = d.plate_x.astype(float), d.plate_y.astype(float)
+    else:
+        track = ["l_wri", "r_wri"] if lift == "bench_press" else ["l_sho", "r_sho"]
+        bx, by = pair_track(d, track)
     bxs, bys = stabilise(d, bx, by)
 
     # --- glitch gate. During fast head movement (motion blur) the stabilisation can be wrong
@@ -267,7 +437,7 @@ def analyse_clip(ci, r):
     ref_med = ref_y.rolling(int(2 * FPS) | 1, center=True, min_periods=5).median()
     ref_bad = (ref_y - ref_med).abs() > REF_DEV_FRAC * body_h
     head = head_speed(d)
-    bar_jump = pd.Series(bys.values).diff().abs().values > BAR_JUMP_FRAC * body_h
+    bar_jump = excursions(bys.values, BAR_JUMP_FRAC * body_h, round(EXCURSION_S * FPS))
     glitch = ref_bad.values | (ref_y.isna().values & (head > HEAD_FAST_PX)) | bar_jump
     bys = bys.where(~glitch)
     n_glitch = int(np.count_nonzero(glitch & np.isfinite(by.values)))
@@ -289,7 +459,8 @@ def analyse_clip(ci, r):
                           "duration_s": round(t[-1] - t[0], 2), "lift": lift, "tracked": "+".join(track),
                           "n_reps": 0, "valid_kp_frac": round(float(valid_frac), 3),
                           "hip_below_shoulder": round(hip_below_sho, 3), "box_aspect": round(aspect, 2),
-                          "stab_valid_frac": round(stab_valid, 3),
+                          "stab_valid_frac": round(stab_valid, 3), "plate_frac": round(plate_frac, 3),
+                          "screen_tilt_deg": round(tilt, 1),
                           "skipped": "too few frames with a tracked bar proxy"})
         return
     yy, vy = smooth_segments(y.values, ok, FPS)  # vy: px/s, +ve = moving down
@@ -533,6 +704,7 @@ def analyse_clip(ci, r):
         "n_spikes_removed": n_spikes,
         "mean_rep_s": round(float(np.mean(durs)), 3) if durs else np.nan,
         "robust_range_stab_px": round(float(robust), 1), "valid_kp_frac": round(float(valid_frac), 3),
+        "plate_frac": round(plate_frac, 3), "screen_tilt_deg": round(tilt, 1),
         "hip_below_shoulder": round(hip_below_sho, 3), "box_aspect": round(aspect, 2),
         "stab_valid_frac": round(stab_valid, 3), "glitch_frames_masked": n_glitch,
         # total unbridged tracking gap time: reps can hide in it, so n_reps is a lower bound
