@@ -15,13 +15,13 @@ changes of on-screen video are detected - frames ~0.25 s apart are aligned and t
 content compared, and a change is confirmed only if no sharp frame within 2 s before matches
 one within 2 s after - and flagged in the `video_change` column. They are not used to split
 clips: fast head movement and the screen leaving the view produce the same signal, so they are
-for review. seg_id identifies the clips; analyse_reps.py uses them as its clips.
+for review. seg_id identifies the clips; 02analyse_reps.py uses them as its clips.
 
 Writes a copy of the pass-1 per-frame data with the stabilisation columns (h00..h22,
 h_inliers, ref_id, seg_id) replaced: OUT_DIR/frames_restab.csv. Feed that to
-analyse_reps.py instead of the pass-1 CSVs.
+02analyse_reps.py instead of the pass-1 CSVs.
 
-usage: restabilise.py VIDEO PASS1_DIR OUT_DIR [--jobs N]
+usage: 01restabilise.py VIDEO PASS1_DIR OUT_DIR [--jobs N]
 """
 import argparse
 import os
@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 from videoinfo import open_video
 
-MIN_CLIP_S, MAX_GAP_S = 8.0, 1.5      # same clip rule as analyse_reps.py
+MIN_CLIP_S, MAX_GAP_S = 8.0, 1.5      # same clip rule as 02analyse_reps.py
 MIN_INLIERS = 40
 KEYFRAME_EVERY = 12                   # frames between keyframe candidates
 CUT_GAP = 6                           # frames apart when comparing on-screen content (~0.25 s)
@@ -142,7 +142,7 @@ def process_clip(job):
         thumbs[f] = (small, cmask)
     cap.release()
     # every frame of the detected clip belongs to it, registered or not; frames that can't be
-    # registered keep an empty transform (analyse_reps.py treats them as tracking gaps)
+    # registered keep an empty transform (02analyse_reps.py treats them as tracking gaps)
     clip_frames = [{"frame": int(f), "seg_id": clip_idx} for f in rows.index]
     if not feats:
         return clip_frames, []
@@ -262,7 +262,7 @@ if __name__ == "__main__":
     if args.jobs < 1:
         raise SystemExit("--jobs must be at least 1")
 
-    # 3: read only the chunks of the latest run_extract_all.py run when it left a list of them
+    # 3: read only the chunks of the latest 00run_extract_all.py run when it left a list of them
     manifest = Path(args.pass1_dir) / "chunks.txt"
     if manifest.exists():
         files = [Path(args.pass1_dir) / n for n in manifest.read_text().split()]
@@ -302,7 +302,7 @@ if __name__ == "__main__":
     else:
         print("no lift clips found: writing the data without stabilisation")
     Path(args.out_dir).mkdir(parents=True, exist_ok=True)
-    # marker checked by analyse_reps.py: pass-1 transforms and segment IDs are chunk-local
+    # marker checked by 02analyse_reps.py: pass-1 transforms and segment IDs are chunk-local
     # and must not be analysed directly
     out["stabilisation"] = "restab"
     # possible changes of on-screen video, per frame (1 = a candidate change starts here)

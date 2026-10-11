@@ -38,7 +38,7 @@ def empty_analysis(tmp_path):
 def test_annotation_refuses_to_overwrite_its_source(tmp_path, tiny_video):
     out = empty_analysis(tmp_path)
     before = tiny_video.read_bytes()
-    proc = run_script("annotate_video.py", tiny_video, out, tiny_video)
+    proc = run_script("03annotate_video.py", tiny_video, out, tiny_video)
     assert proc.returncode != 0 and "source video" in proc.stderr + proc.stdout
     assert tiny_video.read_bytes() == before
 
@@ -49,25 +49,25 @@ def test_annotation_refuses_when_the_temporary_render_is_the_source(tmp_path, ti
     out = empty_analysis(tmp_path)
     src = tmp_path / "x.nochapters.mp4"
     src.write_bytes(tiny_video.read_bytes())
-    proc = run_script("annotate_video.py", src, out, tmp_path / "x.mp4")
+    proc = run_script("03annotate_video.py", src, out, tmp_path / "x.mp4")
     assert proc.returncode != 0 and "source video" in proc.stderr + proc.stdout
 
 
 def test_annotation_of_an_empty_session(tmp_path, tiny_video):
     out = empty_analysis(tmp_path)
-    proc = run_script("annotate_video.py", tiny_video, out, tmp_path / "annotated.mp4", "--no-chapters")
+    proc = run_script("03annotate_video.py", tiny_video, out, tmp_path / "annotated.mp4", "--no-chapters")
     assert proc.returncode == 0, proc.stderr
     assert (tmp_path / "annotated.mp4").stat().st_size > 0
 
 
 def test_annotation_rejects_an_unknown_clip(tmp_path, tiny_video):
     out = empty_analysis(tmp_path)
-    proc = run_script("annotate_video.py", tiny_video, out, tmp_path / "a.mp4", "--clip", "7")
+    proc = run_script("03annotate_video.py", tiny_video, out, tmp_path / "a.mp4", "--clip", "7")
     assert proc.returncode != 0 and "no such clip" in proc.stderr + proc.stdout
 
 
 def test_launcher_rejects_negative_jobs(tmp_path, tiny_video):
-    proc = run_script("run_extract_all.py", tiny_video, "--out-dir", tmp_path / "w", "--jobs", "-1")
+    proc = run_script("00run_extract_all.py", tiny_video, "--out-dir", tmp_path / "w", "--jobs", "-1")
     assert proc.returncode != 0 and "--jobs" in proc.stderr + proc.stdout
 
 
@@ -75,13 +75,13 @@ def test_launcher_refuses_stale_files(tmp_path, tiny_video):
     work = tmp_path / "w"
     work.mkdir()
     (work / "frames_0.csv").write_text("frame\n")
-    proc = run_script("run_extract_all.py", tiny_video, "--out-dir", work)
+    proc = run_script("00run_extract_all.py", tiny_video, "--out-dir", work)
     assert proc.returncode != 0 and "earlier run" in proc.stderr + proc.stdout
     assert (work / "frames_0.csv").exists()
 
 
 def test_restabilise_rejects_zero_jobs(tmp_path, tiny_video):
-    proc = run_script("restabilise.py", tiny_video, tmp_path, tmp_path / "r", "--jobs", "0")
+    proc = run_script("01restabilise.py", tiny_video, tmp_path, tmp_path / "r", "--jobs", "0")
     assert proc.returncode != 0 and "--jobs" in proc.stderr + proc.stdout
 
 
@@ -108,7 +108,7 @@ def test_annotation_refuses_a_hard_link_to_its_source(tmp_path, tiny_video):
     link = tmp_path / "link.mp4"
     os.link(tiny_video, link)  # different path, same file
     before = tiny_video.read_bytes()
-    proc = run_script("annotate_video.py", tiny_video, out, link)
+    proc = run_script("03annotate_video.py", tiny_video, out, link)
     assert proc.returncode != 0 and "source video" in proc.stderr + proc.stdout
     assert tiny_video.read_bytes() == before
 
@@ -193,7 +193,7 @@ def test_launcher_overwrite_never_deletes_an_input_inside_restab(tmp_path, tiny_
     (work / "frames_0.csv").write_text("frame\n")
     inside = work / "restab" / "input.mp4"
     shutil.copy(tiny_video, inside)
-    proc = run_script("run_extract_all.py", inside, "--out-dir", work, "--overwrite")
+    proc = run_script("00run_extract_all.py", inside, "--out-dir", work, "--overwrite")
     assert proc.returncode != 0 and "input video" in proc.stderr + proc.stdout
     assert inside.exists() and (work / "frames_0.csv").exists()
 

@@ -14,8 +14,8 @@ Time:
   *_frame      video frame index
   *_rec_us     video time in microseconds (for joining with eye-tracker timestamps)
 
-usage: analyse_reps.py OUT_DIR FRAMES.csv|FOLDER|PATTERN [...]
-       e.g. analyse_reps.py work/out work   (all work/frames_*.csv)
+usage: 02analyse_reps.py OUT_DIR FRAMES.csv|FOLDER|PATTERN [...]
+       e.g. 02analyse_reps.py work/out work   (all work/frames_*.csv)
 """
 import glob
 import os
@@ -76,8 +76,8 @@ df = pd.concat([pd.read_csv(f) for f in inputs]).sort_values("frame").drop_dupli
 if "stabilisation" not in df.columns or not (df["stabilisation"] == "restab").all():
     # Pass-1 chunks each number their segments from 0 and chain their own transforms, so a lift
     # crossing a chunk boundary would be split, or merged across unrelated coordinate systems.
-    raise SystemExit("These per-frame CSVs come straight from pass 1. Run restabilise.py on them first "
-                     "(run_extract_all.py does this automatically) and analyse its output folder, "
+    raise SystemExit("These per-frame CSVs come straight from pass 1. Run 01restabilise.py on them first "
+                     "(00run_extract_all.py does this automatically) and analyse its output folder, "
                      "e.g. work/restab.")
 df = df.set_index("frame", drop=False)
 # video frame rate, from the per-frame data (pass 1 records each frame's number and time)
@@ -205,7 +205,7 @@ def kp_mean(d, names):
 
 
 # ---------------------------------------------------------------- clip detection
-# Clips are the ones found by restabilise.py (pass 1b), identified by seg_id: runs of athlete
+# Clips are the ones found by 01restabilise.py (pass 1b), identified by seg_id: runs of athlete
 # detections, split where the video on screen changes. A clip spans its first to last frame
 # with the athlete detected; frames inside it that couldn't be registered stay in as gaps.
 has_person = df.p_conf.fillna(0) >= 0.4
@@ -216,7 +216,7 @@ runs.sort(key=lambda r: r["start"])
 runs = [r for r in runs if (r["end"] - r["start"]) / FPS >= MIN_CLIP_S]
 
 clip_rows, rep_rows, event_rows = [], [], []
-frame_tables = []  # per-frame rep/phase + stabilisation, for annotate_video.py
+frame_tables = []  # per-frame rep/phase + stabilisation, for 03annotate_video.py
 
 def analyse_clip(ci, r):
     """Analyse one clip: lift type, bar trace, reps, phases; append to the output lists."""
@@ -540,7 +540,7 @@ def analyse_clip(ci, r):
                                    if "video_change" in d else "",
     })
 
-    # --- per-frame table for annotate_video.py: which rep / phase each frame is in, the
+    # --- per-frame table for 03annotate_video.py: which rep / phase each frame is in, the
     # smoothed bar position, and the re-based stabilising homography (frame -> clip coords)
     phase = np.full(len(d), "", dtype=object)
     cur_rep = np.zeros(len(d), dtype=int)  # rep in progress (0 = before the first rep)
@@ -613,7 +613,7 @@ for c in clip_rows:
 if len(reps_df):
     reps_df.insert(1, "block", reps_df["clip"].map({c["clip"]: c["block"] for c in clip_rows}))
 # Always write every output with its full set of columns, even when a session has no clips or
-# reps, so later steps (annotate_video.py, add_chapters.py) can rely on them.
+# reps, so later steps (03annotate_video.py, add_chapters.py) can rely on them.
 def with_columns(df, cols):
     for c in cols:
         if c not in df:

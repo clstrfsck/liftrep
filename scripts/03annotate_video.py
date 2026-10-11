@@ -15,9 +15,9 @@ stabilising transform (--geom-smooth) to remove jitter; labels are smoothed sepa
 Frames outside clips are copied unchanged, so the output keeps the original timing (frame
 N of the output is frame N of the input when rendering from the start).
 
-usage: annotate_video.py VIDEO ANALYSIS_DIR OUT.mp4 [--start S] [--end S] [--clip N]
+usage: 03annotate_video.py VIDEO ANALYSIS_DIR OUT.mp4 [--start S] [--end S] [--clip N]
 
-ANALYSIS_DIR is the output folder of analyse_reps.py (needs frames_annotation.csv.gz,
+ANALYSIS_DIR is the output folder of 02analyse_reps.py (needs frames_annotation.csv.gz,
 clips.csv and reps.csv). Uses ffmpeg (H.264, with the original audio) if it is on the PATH, otherwise
 OpenCV's mp4v encoder (no audio). With ffmpeg, chapter markers for each clip / lift / rep
 are added (see add_chapters.py) unless --no-chapters is given.

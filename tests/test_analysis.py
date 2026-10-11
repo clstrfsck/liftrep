@@ -1,4 +1,4 @@
-"""End-to-end tests of analyse_reps.py on synthetic sessions with known answers."""
+"""End-to-end tests of 02analyse_reps.py on synthetic sessions with known answers."""
 import numpy as np
 import pandas as pd
 import pytest
@@ -110,14 +110,14 @@ def test_session_without_clips_writes_complete_empty_outputs(tmp_path):
 def test_raw_pass1_input_is_refused(tmp_path):
     frames = session_frames(bar_trace()).drop(columns=["stabilisation"])
     proc, _ = analyse(tmp_path, frames, name="frames_0.csv")
-    assert proc.returncode != 0 and "restabilise.py" in proc.stderr + proc.stdout
+    assert proc.returncode != 0 and "01restabilise.py" in proc.stderr + proc.stdout
 
 
 def test_absolute_wildcard_input(tmp_path):
     src = tmp_path / "in"
     src.mkdir()
     session_frames(bar_trace()).to_csv(src / "frames_restab.csv", index=False)
-    proc = run_script("analyse_reps.py", tmp_path / "out", str(src.resolve() / "frames_*.csv"))
+    proc = run_script("02analyse_reps.py", tmp_path / "out", str(src.resolve() / "frames_*.csv"))
     assert proc.returncode == 0, proc.stderr
 
 

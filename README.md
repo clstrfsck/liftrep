@@ -29,7 +29,7 @@ rep features are derived from the bar's vertical motion.
    Pass 1 builds each frame's transform by chaining from earlier frames, so a single bad
    link (motion blur, a glance away) corrupts every later frame. Pass 1b replaces it.
 
-1b. **Pass 1b – re-stabilisation** (`scripts/restabilise.py`, CPU, ≈ 5–10 min; **required**,
+1b. **Pass 1b – re-stabilisation** (`scripts/01restabilise.py`, CPU, ≈ 5–10 min; **required**,
    and run automatically after pass 1)
    - Finds the lift clips from the pass-1 person detections (runs with gaps under 1.5 s).
      These are the clips used by every later step; every frame of a clip carries its clip ID,
@@ -49,7 +49,7 @@ rep features are derived from the bar's vertical motion.
      transforms, so a lift crossing a chunk boundary would otherwise be split, or merged
      across unrelated coordinate systems. Pass 2 therefore refuses raw pass-1 files.
 
-2. **Pass 2 – rep analysis** (`scripts/analyse_reps.py`, fast, seconds)
+2. **Pass 2 – rep analysis** (`scripts/02analyse_reps.py`, fast, seconds)
    - Uses the clips found by pass 1b, and groups consecutive clips of the same lift into
      blocks. Frames inside a clip that pass 1b couldn't register are kept as tracking gaps;
      clips with less than half their frames registered are skipped (`MIN_REGISTERED_FRAC`).
@@ -140,6 +140,20 @@ work on any OS.
 
 ### Individual passes
 
+The scripts that make up the pipeline are numbered in the order they run:
+
+| Script | Pass |
+|---|---|
+| `scripts/00run_extract_all.py` | 1 and 1b: pose extraction in parallel chunks, then re-stabilisation |
+| `scripts/01restabilise.py` | 1b: re-stabilisation (run by `00run_extract_all.py`; can be run alone) |
+| `scripts/02analyse_reps.py` | 2: rep analysis |
+| `scripts/03annotate_video.py` | 3: annotated video with chapters |
+
+The other scripts are unnumbered: `extract_frames.py` is the pass-1 worker that
+`00run_extract_all.py` starts (it can also process one time window on its own);
+`add_chapters.py`, `device.py`, `videoinfo.py` and `signal_utils.py` are imported by the numbered
+scripts (Python can't import a module whose name starts with a digit); the rest are diagnostics.
+
 All commands are run from the project directory.
 
 ### Pass 1 – extract per-frame data (slow)
@@ -148,7 +162,7 @@ Whole video, split into parallel chunks (outputs `work/frames_<start>.csv`, logs
 `work/log_<start>.txt`), followed automatically by pass 1b (output `work/restab/`):
 
 ```bash
-.venv/bin/python scripts/run_extract_all.py "<video>.mp4"
+.venv/bin/python scripts/00run_extract_all.py "<video>.mp4"
 ```
 
 The video's length is read automatically and split into equal chunks of at least 10 s.
@@ -161,7 +175,7 @@ The run's chunk files are listed in `work/chunks.txt`, which pass 1b reads. Opti
 | `--device` | `auto` | See [Choosing a device](#choosing-a-device) |
 | `--model` | `models/yolo11x-pose.pt` | Pose model |
 | `--overwrite` | off | Delete pass-1 chunk files, logs and the `restab/` folder left in `--out-dir` by an earlier run (otherwise the run stops, so old results can't be mixed in) |
-| `--no-restabilise` | off | Skip pass 1b; run `restabilise.py` yourself before pass 2 |
+| `--no-restabilise` | off | Skip pass 1b; run `01restabilise.py` yourself before pass 2 |
 
 Several processes help even on one GPU, because video decoding and feature matching run on
 the CPU while the GPU runs the pose model; beyond about 4 the gain is small. To watch
@@ -179,11 +193,11 @@ Options: `--start` / `--end` (seconds), `--device` (default `auto`), `--model` (
 
 ### Pass 1b – re-stabilise (CPU, ≈ 5–10 min)
 
-`run_extract_all.py` runs this for you. To run it on its own (for example after
+`00run_extract_all.py` runs this for you. To run it on its own (for example after
 `--no-restabilise`, or after re-running pass 1 for part of the video):
 
 ```bash
-.venv/bin/python scripts/restabilise.py "<video>.mp4" work work/restab
+.venv/bin/python scripts/01restabilise.py "<video>.mp4" work work/restab
 ```
 
 Reads the pass-1 CSVs in `work/`, writes `work/restab/frames_restab.csv`. Option: `--jobs N`
@@ -192,13 +206,13 @@ Reads the pass-1 CSVs in `work/`, writes `work/restab/frames_restab.csv`. Option
 ### Pass 2 – rep analysis (fast, seconds)
 
 ```bash
-.venv/bin/python scripts/analyse_reps.py work/out work/restab
+.venv/bin/python scripts/02analyse_reps.py work/out work/restab
 ```
 
 The first argument is the output directory. The rest are the per-frame CSVs from pass 1b,
 given as files, a folder (all `frames_*.csv` in it) or a wildcard pattern (expanded by the
 script, so it also works in Windows shells). Raw pass-1 CSVs are refused, with a message
-to run `restabilise.py` first. Pass 2 runs on the CPU and can be re-run freely after
+to run `01restabilise.py` first. Pass 2 runs on the CPU and can be re-run freely after
 changing thresholds without repeating pass 1 or 1b; QA plots from an earlier run are removed
 first. Every output file is always written with
 its full set of columns, even when a video contains no lift clips.
@@ -209,10 +223,10 @@ Draws the analysis onto the scene video:
 
 ```bash
 # one clip (with 1 s either side), for checking
-.venv/bin/python scripts/annotate_video.py "<video>.mp4" work/out work/annotated_clip1.mp4 --clip 1
+.venv/bin/python scripts/03annotate_video.py "<video>.mp4" work/out work/annotated_clip1.mp4 --clip 1
 
 # whole video
-.venv/bin/python scripts/annotate_video.py "<video>.mp4" work/out work/annotated.mp4
+.venv/bin/python scripts/03annotate_video.py "<video>.mp4" work/out work/annotated.mp4
 ```
 
 Options: `--clip N` (one clip), or `--start` / `--end` (seconds) for any time range;
@@ -326,7 +340,7 @@ period around it (`dwell_start_t`, `dwell_end_t`, `dwell_s`). Counted reps only.
 
 ### `frames_annotation.csv.gz` – one row per frame inside a clip
 
-Used by `annotate_video.py`, and also handy for joining with other per-frame data (e.g. gaze):
+Used by `03annotate_video.py`, and also handy for joining with other per-frame data (e.g. gaze):
 `frame`, `t`, `clip`, `rep` (rep in progress, 0 before the first), `n_reps`, `phase`
 (`setup`, `top_dwell`, `lowering`, `bottom_dwell`, `effort`, or empty), bar proxy position
 (`bar_stab_x/y` smoothed, `bar_scene_x/y`), `person_w`, and the re-based homography
@@ -401,7 +415,7 @@ then measures the phases and dwells around the top and bottom levels found that 
 - **Partial rep** – a rep with < 50% of the clip's median range (`PARTIAL_RANGE_FRAC`),
   typically at the start or end of a clip. Listed, but not counted.
 
-Thresholds are constants at the top of `scripts/analyse_reps.py`. Setting the environment
+Thresholds are constants at the top of `scripts/02analyse_reps.py`. Setting the environment
 variable `ANALYSE_DEBUG_CLIP=N` prints, for each rep candidate in clip `N`, its movement
 onset and stop times, top and bottom levels, and range against the minimum range.
 
@@ -435,8 +449,8 @@ onset and stop times, top and bottom levels, and range against the minimum range
 | `scripts/screen_probe.py VIDEO OUT_DIR T1 T2 …` | Show the detected screen region at given times |
 | `scripts/pose_probe.py VIDEO T0 T1 MODEL OUT_PREFIX [DEVICE]` | Pose speed / detection check on a time window (`DEVICE` defaults to `auto`) |
 | `scripts/plot_test.py FRAMES.csv OUT.png` | Raw vs stabilised wrist trace and tracking diagnostics |
-| `scripts/restabilise.py VIDEO PASS1_DIR OUT_DIR [--jobs N]` | Pass 1b: direct-to-reference re-stabilisation (see above) |
-| `scripts/annotate_video.py` | Pass 3: annotated video (see above) |
+| `scripts/01restabilise.py VIDEO PASS1_DIR OUT_DIR [--jobs N]` | Pass 1b: direct-to-reference re-stabilisation (see above) |
+| `scripts/03annotate_video.py` | Pass 3: annotated video (see above) |
 | `scripts/add_chapters.py VIDEO ANALYSIS_DIR OUT.mp4 [--offset S]` | Add clip / lift / rep chapters to a video without re-encoding |
 | `scripts/device.py` | Shared helper: picks the compute device (not run directly) |
 | `scripts/videoinfo.py` | Shared helper: opens a video and checks its frame rate, frame count and requested times (not run directly) |
@@ -453,7 +467,7 @@ uv pip install --python .venv -r requirements-dev.txt
 **Tests** – `tests/` holds a pytest suite that needs no real recording or GPU:
 
 - unit tests of the signal helpers (gap bridging, continuous runs, per-run smoothing);
-- end-to-end runs of `analyse_reps.py` on synthetic sessions with known answers (rep counts,
+- end-to-end runs of `02analyse_reps.py` on synthetic sessions with known answers (rep counts,
   phase timings, bench press / squat classification, set-up, short and long tracking gaps,
   indeterminate reps, clips with unregistered edges, empty sessions);
 - input checks and safety guards of the command-line scripts (refusing raw pass-1 data,

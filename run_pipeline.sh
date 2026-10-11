@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Run the whole pipeline on one scene video:
-#   pass 1   pose extraction (parallel chunks)          scripts/run_extract_all.py
-#   pass 1b  re-stabilisation (run by the launcher)     scripts/restabilise.py
-#   pass 2   rep analysis                                scripts/analyse_reps.py
-#   pass 3   annotated video with chapters (optional)   scripts/annotate_video.py
+#   pass 1   pose extraction (parallel chunks)          scripts/00run_extract_all.py
+#   pass 1b  re-stabilisation (run by the launcher)     scripts/01restabilise.py
+#   pass 2   rep analysis                                scripts/02analyse_reps.py
+#   pass 3   annotated video with chapters (optional)   scripts/03annotate_video.py
 #
 # usage: ./run_pipeline.sh [options] VIDEO
 #
@@ -88,15 +88,15 @@ extract_args=("$video" --out-dir "$out_dir" --device "$device")
 [[ -n "$jobs" ]] && extract_args+=(--jobs "$jobs")
 [[ -n "$model" ]] && extract_args+=(--model "$model")
 [[ $overwrite -eq 1 ]] && extract_args+=(--overwrite)
-"$py" "$scripts/run_extract_all.py" "${extract_args[@]}"
+"$py" "$scripts/00run_extract_all.py" "${extract_args[@]}"
 
 step "Pass 2: rep analysis"
-"$py" "$scripts/analyse_reps.py" "$analysis_dir" "$out_dir/restab" > "$out_dir/analysis_summary.txt"
+"$py" "$scripts/02analyse_reps.py" "$analysis_dir" "$out_dir/restab" > "$out_dir/analysis_summary.txt"
 echo "clip summary: $out_dir/analysis_summary.txt"
 
 if [[ $make_video -eq 1 ]]; then
     step "Pass 3: annotated video"
-    "$py" "$scripts/annotate_video.py" "$video" "$analysis_dir" "$annotated"
+    "$py" "$scripts/03annotate_video.py" "$video" "$analysis_dir" "$annotated"
 fi
 
 elapsed=$((SECONDS - start))

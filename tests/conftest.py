@@ -68,12 +68,12 @@ def session_frames(bar_y, lift="bench_press"):
 
 
 def analyse(tmp_path, frames, name="frames_restab.csv"):
-    """Write frames to a CSV, run analyse_reps.py on it; returns (process, out_dir)."""
+    """Write frames to a CSV, run 02analyse_reps.py on it; returns (process, out_dir)."""
     src = tmp_path / "in"
     src.mkdir(exist_ok=True)
     frames.to_csv(src / name, index=False)
     out = tmp_path / "out"
-    return run_script("analyse_reps.py", out, src), out
+    return run_script("02analyse_reps.py", out, src), out
 
 
 @pytest.fixture

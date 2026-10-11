@@ -9,7 +9,7 @@ Reps whose tracking quality is "check" get " [check]" appended.
 usage: add_chapters.py VIDEO ANALYSIS_DIR OUT.mp4 [--offset S]
 
 --offset is the source time (s) of the video's first frame, for videos rendered from a
-time range (annotate_video.py --start/--clip); 0 for a whole-video render.
+time range (03annotate_video.py --start/--clip); 0 for a whole-video render.
 OUT may not be the same file as VIDEO. Requires ffmpeg on the PATH.
 """
 import argparse
@@ -76,7 +76,7 @@ def write_with_chapters(video, analysis_dir, out, offset=0.0):
     chs = chapters(analysis_dir, offset, duration, fps)
     meta = [";FFMETADATA1",
             "title=" + esc(Path(video).stem + " - lift rep annotations"),
-            "comment=" + esc("Chapters: clip / lift / rep from analyse_reps.py")]
+            "comment=" + esc("Chapters: clip / lift / rep from 02analyse_reps.py")]
     for s, e, title in chs:
         meta += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={round(s * 1000)}",
                  f"END={round(e * 1000)}", "title=" + esc(title)]
