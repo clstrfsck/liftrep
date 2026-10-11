@@ -1,4 +1,7 @@
-"""Probe: detect the projector-screen quadrilateral in sample frames and draw it."""
+"""Diagnostic: detect the projector-screen quadrilateral in sample frames and draw it.
+
+usage: screen_probe.py VIDEO OUT_DIR T1 [T2 ...]   (times in seconds)
+"""
 import sys
 from pathlib import Path
 

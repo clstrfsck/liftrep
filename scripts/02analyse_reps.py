@@ -1,10 +1,12 @@
 """Pass 2: find lift clips, reps, top/bottom of travel, dwell and effort timing.
 
-Reads the per-frame CSV(s) written by extract_frames.py and writes:
-  out/clips.csv   one row per detected lift clip
-  out/reps.csv    one row per rep (timings, durations, pixels)
-  out/events.csv  one row per top / bottom of travel event
-  out/plots/clip_NN.png  QA plot per clip
+Reads the per-frame CSV written by 01restabilise.py (pass 1b; raw pass-1 CSVs are refused)
+and writes to OUT_DIR:
+  clips.csv                 one row per detected lift clip
+  reps.csv                  one row per rep (timings, durations, pixels, status)
+  events.csv                one row per top / bottom of travel event (counted reps)
+  frames_annotation.csv.gz  one row per clip frame: rep, phase, bar position, transform
+  plots/clip_NN.png         QA plot per clip
 
 Coordinates:
   *_scene_x/y  pixel in the scene video at that frame (same space as an eye tracker's gaze point)
@@ -15,7 +17,7 @@ Time:
   *_rec_us     video time in microseconds (for joining with eye-tracker timestamps)
 
 usage: 02analyse_reps.py OUT_DIR FRAMES.csv|FOLDER|PATTERN [...]
-       e.g. 02analyse_reps.py work/out work   (all work/frames_*.csv)
+       e.g. 02analyse_reps.py work/out work/restab   (all frames_*.csv in work/restab)
 """
 import glob
 import os

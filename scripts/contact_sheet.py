@@ -1,4 +1,7 @@
-"""Contact sheets of the scene video: one labelled thumbnail every STEP seconds."""
+"""Diagnostic: contact sheets of the scene video, one labelled thumbnail every STEP_S seconds.
+
+usage: contact_sheet.py VIDEO OUT_DIR [STEP_S]   (STEP_S defaults to 10)
+"""
 import sys
 from pathlib import Path
 

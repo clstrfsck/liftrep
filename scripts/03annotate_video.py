@@ -4,23 +4,26 @@ For every frame inside a detected lift clip it draws:
   * top of travel line (green) and bottom of travel line (red) for the rep in progress,
     fixed to the screen content (they follow the observer's head movement)
   * dwell time next to each line: a live timer while dwelling, otherwise the last dwell
-  * effort (lifting) arrow from the bottom line to the top line with its duration, and a
-    thinner lowering arrow; live while in progress, otherwise the last value
+  * "raising" (effort) arrow from the bottom line to the top line with its duration, and a
+    thinner "lowering" arrow; live while in progress, otherwise the last value
   * the bar proxy position
+  * a panel with clip, lift, rep number / total reps in the clip, and the last rep's duration
+
 Lines, arrows and the bar marker are drawn through a time-smoothed version of the
 stabilising transform (--geom-smooth) to remove jitter; labels are smoothed separately
 (--label-smooth).
-  * a panel with clip, lift, rep number / total reps in the clip, and the last rep's duration
 
 Frames outside clips are copied unchanged, so the output keeps the original timing (frame
 N of the output is frame N of the input when rendering from the start).
 
 usage: 03annotate_video.py VIDEO ANALYSIS_DIR OUT.mp4 [--start S] [--end S] [--clip N]
+                           [--geom-smooth S] [--label-smooth S] [--no-chapters]
 
 ANALYSIS_DIR is the output folder of 02analyse_reps.py (needs frames_annotation.csv.gz,
-clips.csv and reps.csv). Uses ffmpeg (H.264, with the original audio) if it is on the PATH, otherwise
-OpenCV's mp4v encoder (no audio). With ffmpeg, chapter markers for each clip / lift / rep
-are added (see add_chapters.py) unless --no-chapters is given.
+clips.csv and reps.csv). OUT must not be the source video. Uses ffmpeg (H.264, with the
+original audio) if it is on the PATH, otherwise OpenCV's mp4v encoder (no audio). With
+ffmpeg, chapter markers for each clip / lift / rep are added (see add_chapters.py) unless
+--no-chapters is given.
 """
 import argparse
 import shutil

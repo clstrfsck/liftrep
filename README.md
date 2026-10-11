@@ -17,7 +17,8 @@ rep features are derived from the bar's vertical motion.
 
 ## How it works
 
-1. **Pass 1 – per-frame extraction** (`scripts/extract_frames.py`, slow, GPU)
+1. **Pass 1 – per-frame extraction** (`scripts/extract_frames.py`, run in parallel chunks by
+   `scripts/00run_extract_all.py`; slow, GPU)
    - Finds the bright projected clip on the screen in each scene-video frame.
    - Runs YOLO pose (`yolo11x-pose`) on a crop around it and keeps the best person whose
      centre is on the screen (inside the convex outline of the bright region); people in the
@@ -59,8 +60,12 @@ rep features are derived from the bar's vertical motion.
      below the shoulders (relative to body height); lying on a bench they are level.
    - Uses a bar proxy: **wrists** for bench press, **shoulders** for squat (bar on upper back).
    - Smooths the stabilised vertical position, finds bottoms/tops, dwell periods, eccentric
-     (lowering) and effort (lifting) phases, removes tracking spikes, marks partial reps,
-     and writes CSVs plus a QA plot per clip.
+     (lowering) and effort (lifting) phases, removes tracking spikes, marks partial and
+     indeterminate reps, and writes CSVs plus a QA plot per clip.
+
+3. **Pass 3 – annotated video** (`scripts/03annotate_video.py`, optional, ≈ 5 min)
+   - Draws the top and bottom of travel, dwell, lowering and raising times, and rep counts
+     onto the scene video, and adds clip / lift / rep chapters.
 
 ## Setup (once)
 
@@ -133,9 +138,10 @@ cost in keypoint accuracy.
 Runs pass 1 and 1b (pose extraction and re-stabilisation), pass 2 (rep analysis) and pass 3
 (annotated video with chapters) in order. Results go to `work/<video name>/`: the analysis in
 `out/` and the video as `annotated.mp4`. Options: `--out-dir DIR`, `--jobs N`, `--device DEV`,
-`--model PATH`, `--overwrite` (replace an earlier run's results, including an earlier annotated video even with `--no-video`; otherwise the script stops),
-`--no-video` (skip pass 3); `./run_pipeline.sh --help` lists them. It can be run from any
-folder. It needs bash (macOS, Linux, or Git Bash/WSL on Windows); the individual passes below
+`--model PATH`, `--overwrite` (replace an earlier run's results, including an earlier
+annotated video even with `--no-video`; otherwise the script stops; it never deletes the input
+video), `--no-video` (skip pass 3); `./run_pipeline.sh --help` lists them. It can be run from
+any folder. It needs bash (macOS, Linux, or Git Bash/WSL on Windows); the individual passes below
 work on any OS.
 
 ### Individual passes
@@ -261,9 +267,10 @@ What is drawn in each lift clip:
 | Panel (top left) | Clip number and lift, `Rep k of N` for the clip, last rep's duration, current phase |
 
 Times count up live while a phase is in progress; otherwise they show the last completed
-value. During set-up (before a clip's first rep) no timer runs. The lines are drawn in the clip's stabilised coordinates and mapped back into each
-frame (through the smoothed transform), so they stay on the screen content as the
-observer's head moves.
+value; the label of the phase in progress is drawn slightly larger. During set-up (before a
+clip's first rep) no timer runs. The lines are drawn in the clip's stabilised coordinates and
+mapped back into each frame (through the smoothed transform), so they stay on the screen
+content as the observer's head moves.
 
 The script uses ffmpeg (H.264, original audio kept) if it is installed and on the PATH;
 otherwise it falls back to OpenCV's `mp4v` encoder without audio.
@@ -288,7 +295,10 @@ seconds):
 
 Use `--offset S` there if the video was rendered from a time range starting at `S` seconds.
 
-## Outputs (`work/out/`)
+## Outputs
+
+The analysis is written to `out/` in the working folder: `work/out/` when the passes are run
+one by one as above, `work/<video name>/out/` with `run_pipeline.sh`.
 
 ### `clips.csv` – one row per lift clip
 
@@ -349,8 +359,9 @@ Used by `03annotate_video.py`, and also handy for joining with other per-frame d
 ### `plots/clip_NN.png` – QA plot per clip
 
 Top panel: stabilised bar position (up = top of travel) with tops (▲), bottoms (▼),
-top dwell (green), bottom dwell (red); partial reps are hollow grey ▽. Bottom panel: vertical velocity with the effort
-phase shaded orange. Check these before trusting a clip's numbers.
+top dwell (green), bottom dwell (red); partial and indeterminate reps are hollow grey ▽.
+Bottom panel: vertical velocity with the effort phase shaded orange. Check these before
+trusting a clip's numbers.
 
 ## Coordinates and time
 
@@ -373,8 +384,8 @@ then measures the phases and dwells around the top and bottom levels found that 
   speed and 15 stabilised px/s (`V_STILL_FRAC`, `V_STILL_MIN`); a movement ends after 2
   stationary frames (`STILL_FRAMES`), judged on a 5-frame rolling median of the velocity so
   single jittery frames don't count. A rep's peak speeds come from the descent leading into
-  its bottom and the ascent leaving it, not from movement elsewhere. On the way **up**, the movement only ends within 30% of the
-  travel from the top (`NEAR_TOP_FRAC`), so a brief pause partway up (a sticking point)
+  its bottom and the ascent leaving it, not from movement elsewhere. On the way **up**, the
+  movement only ends within 30% of the travel from the top (`NEAR_TOP_FRAC`), so a brief pause partway up (a sticking point)
   stays inside the effort phase; stillness longer than 1 s (`MAX_STALL_S`) ends it anyway.
   A stationary bar at another height (in the rack, during set-up, paused playback)
   therefore never becomes part of a rep.
@@ -397,7 +408,8 @@ then measures the phases and dwells around the top and bottom levels found that 
   (`DWELL_BAND`).
 - **Lowering (eccentric)** – end of top dwell → start of bottom dwell.
 - **Effort (concentric)** – end of bottom dwell → start of the next top dwell. Both bench
-  press and squat start at the top, so effort is the upward movement for both.
+  press and squat start at the top, so effort is the upward movement for both. The annotated
+  video labels it "raising"; the data columns use `effort_*`.
 - **Rep** – end of top dwell → start of the next top dwell. A rep must travel at least 40%
   of the clip's typical range (`MIN_REP_RANGE_FRAC`).
 - **Set-up** – everything in a clip before the first rep's top dwell (unracking, settling,
@@ -414,6 +426,8 @@ then measures the phases and dwells around the top and bottom levels found that 
   neighbouring reps are rebuilt without it.
 - **Partial rep** – a rep with < 50% of the clip's median range (`PARTIAL_RANGE_FRAC`),
   typically at the start or end of a clip. Listed, but not counted.
+- **Indeterminate rep** – a rep whose lowering or effort phase spans an unbridged tracking
+  gap (see Tracking gaps). Listed, but not counted.
 
 Thresholds are constants at the top of `scripts/02analyse_reps.py`. Setting the environment
 variable `ANALYSE_DEBUG_CLIP=N` prints, for each rep candidate in clip `N`, its movement
@@ -441,17 +455,17 @@ onset and stop times, top and bottom levels, and range against the minimum range
 - **Blocks are numbered, not named.** Mapping blocks and clips to the athlete and load
   conditions has to come from the study protocol.
 
-## Other scripts (diagnostics)
+## Other scripts
+
+The pipeline scripts (`00`–`03`, `extract_frames.py`) are described under Running. The rest:
 
 | Script | Purpose |
 |---|---|
-| `scripts/contact_sheet.py VIDEO OUT_DIR [STEP_S]` | Labelled thumbnail sheets every `STEP_S` seconds (session overview) |
-| `scripts/screen_probe.py VIDEO OUT_DIR T1 T2 …` | Show the detected screen region at given times |
-| `scripts/pose_probe.py VIDEO T0 T1 MODEL OUT_PREFIX [DEVICE]` | Pose speed / detection check on a time window (`DEVICE` defaults to `auto`) |
-| `scripts/plot_test.py FRAMES.csv OUT.png` | Raw vs stabilised wrist trace and tracking diagnostics |
-| `scripts/01restabilise.py VIDEO PASS1_DIR OUT_DIR [--jobs N]` | Pass 1b: direct-to-reference re-stabilisation (see above) |
-| `scripts/03annotate_video.py` | Pass 3: annotated video (see above) |
-| `scripts/add_chapters.py VIDEO ANALYSIS_DIR OUT.mp4 [--offset S]` | Add clip / lift / rep chapters to a video without re-encoding |
+| `scripts/add_chapters.py VIDEO ANALYSIS_DIR OUT.mp4 [--offset S]` | Add clip / lift / rep chapters to a video without re-encoding (run automatically by pass 3) |
+| `scripts/contact_sheet.py VIDEO OUT_DIR [STEP_S]` | Diagnostic: labelled thumbnail sheets every `STEP_S` seconds (session overview) |
+| `scripts/screen_probe.py VIDEO OUT_DIR T1 T2 …` | Diagnostic: show the detected screen region at given times |
+| `scripts/pose_probe.py VIDEO T0 T1 MODEL OUT_PREFIX [DEVICE]` | Diagnostic: pose speed / detection check on a time window (`DEVICE` defaults to `auto`) |
+| `scripts/plot_test.py FRAMES.csv OUT.png` | Diagnostic: raw vs stabilised wrist trace and tracking diagnostics |
 | `scripts/device.py` | Shared helper: picks the compute device (not run directly) |
 | `scripts/videoinfo.py` | Shared helper: opens a video and checks its frame rate, frame count and requested times (not run directly) |
 | `scripts/signal_utils.py` | Shared helper: gap bridging, continuous runs and per-run smoothing for the analysis (not run directly) |
@@ -471,7 +485,10 @@ uv pip install --python .venv -r requirements-dev.txt
   phase timings, bench press / squat classification, set-up, short and long tracking gaps,
   indeterminate reps, clips with unregistered edges, empty sessions);
 - input checks and safety guards of the command-line scripts (refusing raw pass-1 data,
-  never overwriting the source video, stale files, invalid `--jobs`, unreadable videos).
+  never overwriting or deleting the source video, including through hard links; stale files;
+  invalid `--jobs`; unreadable or undecodable videos).
+
+Without ffmpeg installed, one test (the temporary chapter render) is skipped.
 
 ```bash
 .venv/bin/python -m pytest

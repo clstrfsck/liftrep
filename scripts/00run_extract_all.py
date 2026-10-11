@@ -1,7 +1,9 @@
 """Run pass-1 extraction over a whole video in parallel chunks (any OS), then pass 1b.
 
-Splits the video into JOBS equal time chunks, runs extract_frames.py on each in its own
-process, and waits for them all. Outputs work/frames_<start>.csv and work/log_<start>.txt.
+Splits the video into JOBS equal time chunks (each at least 10 s), runs extract_frames.py on
+each in its own process, and waits for them all. Outputs work/frames_<start>.csv,
+work/log_<start>.txt and work/chunks.txt (the list of this run's chunks). Stops if the folder
+holds files from an earlier run, unless --overwrite (which never deletes the input video).
 Then runs 01restabilise.py (pass 1b) into work/restab/, which 02analyse_reps.py requires: each
 pass-1 chunk numbers its segments and chains its transforms independently.
 
